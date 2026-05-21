@@ -7,11 +7,6 @@
     "android": {
       "package": "com.system.posservice",
       "versionCode": 1,
-      "foregroundService": {
-        "notificationTitle": "POS Service",
-        "notificationBody": "Sincronizando dados",
-        "notificationColor": "#1e293b"
-      },
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
