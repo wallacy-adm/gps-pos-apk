@@ -1,0 +1,45 @@
+{
+  "expo": {
+    "name": "POS Service",
+    "slug": "pos-service",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "android": {
+      "package": "com.system.posservice",
+      "versionCode": 1,
+      "foregroundService": {
+        "notificationTitle": "POS Service",
+        "notificationBody": "Sincronizando dados",
+        "notificationColor": "#1e293b"
+      },
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "RECEIVE_BOOT_COMPLETED",
+        "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "POS Service needs location access."
+        }
+      ],
+      "./plugins/with-boot-receiver.js"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "fad3e092-19a1-4762-8914-99b6d206aa03"
+      }
+    },
+    "owner": "wallacy1"
+  }
+}
