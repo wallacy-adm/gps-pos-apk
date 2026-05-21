@@ -9,13 +9,22 @@ import { locationProviderFromGpsEnabled } from './location-service';
 export const GPS_TASK = 'GPS_LOCATION_TASK';
 const queue = new OfflineQueue();
 
-async function getOrCreateDeviceId(): Promise<string | null> {
+/**
+ * Busca o ID interno (UUID) do device pelo serial.
+ * IMPORTANTE: chame sendHeartbeat() ANTES desta função para garantir
+ * que o device existe no banco (upsert cria se não existir).
+ */
+async function getDeviceUUID(): Promise<string | null> {
   const serial = await getDeviceId();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('devices')
     .select('id')
     .eq('serial', serial)
     .single();
+  if (error) {
+    console.error('[GPS Task] getDeviceUUID error:', error.message);
+    return null;
+  }
   return data?.id ?? null;
 }
 
@@ -44,7 +53,7 @@ async function flushQueue(deviceId: string): Promise<void> {
 }
 
 TaskManager.defineTask(GPS_TASK, async ({ data, error: taskErr }: any) => {
-  if (taskErr) { console.error('[GPS Task]', taskErr); return; }
+  if (taskErr) { console.error('[GPS Task] error:', taskErr); return; }
   const locs: Location.LocationObject[] = data?.locations ?? [];
   if (!locs.length) return;
 
@@ -52,13 +61,25 @@ TaskManager.defineTask(GPS_TASK, async ({ data, error: taskErr }: any) => {
   const gpsEnabled = await Location.hasServicesEnabledAsync();
 
   try {
-    const deviceId = await getOrCreateDeviceId();
-    if (!deviceId) return;
-
-    await sendLocation(deviceId, loc, gpsEnabled);
+    // 1. Heartbeat PRIMEIRO — upsert garante que o device existe no banco
+    //    (cria na primeira vez, atualiza nas demais)
     await sendHeartbeat(loc.coords.latitude, loc.coords.longitude);
+
+    // 2. Busca o UUID interno após garantir que o device existe
+    const deviceId = await getDeviceUUID();
+    if (!deviceId) {
+      console.error('[GPS Task] device UUID não encontrado após heartbeat');
+      return;
+    }
+
+    // 3. Envia localização atual
+    await sendLocation(deviceId, loc, gpsEnabled);
+
+    // 4. Descarrega fila offline (localizações acumuladas sem internet)
     await flushQueue(deviceId);
-  } catch {
+
+  } catch (err: any) {
+    console.warn('[GPS Task] falha de rede, enfileirando:', err?.message);
     await queue.enqueue({
       lat: loc.coords.latitude,
       lng: loc.coords.longitude,
