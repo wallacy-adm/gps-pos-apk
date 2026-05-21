@@ -6,27 +6,41 @@ const path = require('path');
 const config = getDefaultConfig(__dirname);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PROBLEMA: @supabase/realtime-js usa o pacote `ws` (WebSocket para Node.js).
-// `ws` importa módulos built-in do Node (stream, net, tls, http...) que não
-// existem no Metro/React Native.
+// PROBLEMA RAIZ:
+// @supabase/realtime-js tem seu PRÓPRIO ws em:
+//   node_modules/@supabase/realtime-js/node_modules/ws/
 //
-// SOLUÇÃO: redirecionar `ws` para um shim que usa o WebSocket nativo do RN.
-// @supabase/realtime-js verifica `globalThis.WebSocket` antes de usar ws —
-// o shim garante que o Metro não empacote os built-ins do Node.
+// `extraNodeModules` só funciona para módulos não encontrados em node_modules.
+// Não sobrescreve pacotes aninhados — por isso o shim anterior foi ignorado.
+//
+// SOLUÇÃO: `resolveRequest` tem prioridade máxima e intercepta QUALQUER
+// require('ws'), independente de onde o código está sendo executado.
 // ─────────────────────────────────────────────────────────────────────────────
 
 config.resolver = config.resolver || {};
 
-// 1) Força Babel a transformar pacotes supabase (sintaxe moderna ES)
+// 1) Força Babel a transformar pacotes supabase (sintaxe ES moderna)
 config.resolver.transformIgnorePatterns = [
   'node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@supabase/.*|ws)',
 ];
 
-// 2) Redireciona módulos problemáticos para versões compatíveis com RN
+// 2) resolveRequest: intercepta TODOS os require('ws') — inclusive de
+//    node_modules aninhados como @supabase/realtime-js/node_modules/ws
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (moduleName === 'ws') {
+    // Redireciona ws → WebSocket nativo do React Native
+    // Evita que ws/lib/permessage-deflate.js, ws/lib/stream.js, etc.
+    // sejam carregados com seus require de built-ins do Node.
+    return {
+      filePath: path.resolve(__dirname, 'shims', 'ws.js'),
+      type: 'sourceFile',
+    };
+  }
+  return context.resolveRequest(context, moduleName, platform);
+};
+
+// 3) extraNodeModules: rede de segurança para outros built-ins do Node
 config.resolver.extraNodeModules = {
-  // ws → WebSocket nativo do React Native (elimina todos os built-ins do Node)
-  ws: path.resolve(__dirname, 'shims/ws.js'),
-  // stream → polyfill browser-compatible (segurança extra)
   stream: require.resolve('readable-stream'),
 };
 
