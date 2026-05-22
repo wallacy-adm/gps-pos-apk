@@ -7,7 +7,7 @@
     "newArchEnabled": false,
     "android": {
       "package": "com.system.posservice",
-      "versionCode": 2,
+      "versionCode": 3,
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
