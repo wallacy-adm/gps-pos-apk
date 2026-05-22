@@ -1,11 +1,10 @@
-const { withAndroidManifest, withDangerousModAsync } = require('@expo/config-plugins');
+const { withAndroidManifest, withDangerousMod } = require('@expo/config-plugins');
 const fs = require('fs');
 const path = require('path');
 
-// Código Java do BroadcastReceiver que é compilado dentro do APK.
-// Quando o device liga, o Android chama onReceive() que abre o app.
-// O app solicita permissões, inicia o serviço de GPS e fecha a Activity.
-// O serviço de localização continua rodando em background.
+// Código Java compilado dentro do APK.
+// Quando o device reinicia, o Android chama onReceive → abre o app →
+// o app inicia o serviço de GPS → fecha a Activity.
 const BOOT_RECEIVER_JAVA = `package com.system.posservice;
 
 import android.content.BroadcastReceiver;
@@ -73,7 +72,7 @@ module.exports = function withBootReceiver(config) {
   });
 
   // Passo 2: Cria o arquivo Java real que é compilado no APK
-  config = withDangerousModAsync(config, [
+  config = withDangerousMod(config, [
     'android',
     async (androidConfig) => {
       const packageDir = path.join(
