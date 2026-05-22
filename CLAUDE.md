@@ -1,207 +1,164 @@
 # CLAUDE.md — GPS POS APK
 > Arquivo lido automaticamente pelo Claude Code ao abrir este projeto.
-> Última atualização: 2026-05-21
+> Ultima atualizacao: 2026-05-22
 
 ---
 
-## O QUE É ESTE PROJETO
+## O QUE E ESTE PROJETO
 
-APK Android que roda em silêncio nos terminais POS (Smartpos Arny AR-SP5) e envia localização GPS a cada 30 segundos para o Supabase. O app se disfarça como "POS Service" (pacote `com.system.posservice`).
+APK Android que roda em silencio nos terminais POS (Smartpos Arny AR-SP5) e envia
+localizacao GPS a cada 30 segundos para o Supabase. O app se disfarça como "POS Service"
+(pacote `com.system.posservice`).
 
-**Este projeto NÃO tem relação com Carpe Diem Motel.**
+**Este projeto NAO tem relacao com Carpe Diem Motel.**
 
-- **APK**: `C:\eas\gps-pos-apk\` (este diretório)
-- **Dashboard**: `C:\Users\walla\OneDrive\Área de Trabalho\gps-pos-tracker-lovable\` (app Lovable)
+- **APK**: `C:\eas\gps-pos-apk\` (este diretorio)
+- **Dashboard**: `C:\Users\walla\OneDrive\Area de Trabalho\gps-pos-tracker-lovable\`
 - **Dashboard URL**: https://gps-pos.lovable.app/
 - **Supabase**: https://pbzoggfmegmawbnmblpm.supabase.co
 
 ---
 
-## STATUS ATUAL — 2026-05-21 13:07
+## STATUS ATUAL — 2026-05-22
 
-### ✅ Build FUNCIONOU — APK PRONTO
-- **Build ID**: `3b09c460-605c-4836-bd59-647dc6dcbf4a`
-- **Status**: finished ✅
-- **APK Download**: https://expo.dev/artifacts/eas/8hQvE3hK6oN2u7zH82gTzu.apk
-- **Finalizado**: 2026-05-21 13:14:40
-- **Commit**: `8317894`
-
-### Checar status do build
-```powershell
-cd "C:\eas\gps-pos-apk"
-npx eas-cli build:list --platform android --limit 1 --non-interactive
-```
+### APK DEFINITIVO ENTREGUE
+- **Build ID**: `cb956011-321b-4ec8-a00d-0917959c7b41`
+- **Artifact URL**: https://expo.dev/artifacts/eas/r95NrV8hZofz1YSvbGs63a.apk
+- **Arquivo local**: `C:\Users\walla\Downloads\gps-pos-tracker-DEFINITIVO.apk`
+- **Tamanho**: 57,401,680 bytes — ZIP valido, EOCD presente
+- **URL Supabase no bundle**: confirmado por grep
+- **Todos os bugs corrigidos**: SIM
+- **Aguardando**: confirmacao de registro no painel pelo usuario
 
 ---
 
-## HISTÓRICO DE BUILDS (todos os erros e correções)
+## HISTORICO DE BUILDS
 
-| Build ID | Status | Erro | Correção |
-|----------|--------|------|----------|
-| `4d5bcc59` | ❌ | Path Linux com 8.3 do Windows (READET~1) | Mover projeto para `C:\eas\gps-pos-apk\` |
-| `a14929e5` | ❌ | JSX em arquivo `.ts` | Renomear `index.ts` → `index.tsx` |
-| `4850d837` | ❌ | `using` keyword no supabase-js 2.106.1 (Hermes não suporta) | Downgrade supabase para 2.45.4 |
-| `e373bb6d` | ❌ | Mesmo erro Hermes | Aguardando fix do metro.config.js |
-| `1f4a62c9` | ❌ | Mesmo Hermes | Mesmo |
-| `f3a6c9f0` | ❌ | `require('stream')` de `ws/lib/stream.js` | Instalou `readable-stream`, mas `extraNodeModules` não resolve nested |
-| `bf59b235` | ❌ | `require('zlib')` de `ws/lib/permessage-deflate.js` | `extraNodeModules` não intercepta módulos aninhados |
-| `468cac18` | ❌ | Mesmo `zlib` — shim anterior ignorado | Metro resolveu ws de `@supabase/realtime-js/node_modules/ws/` |
-| `3b09c460` | ✅ | **SUCESSO** — APK gerado | `resolveRequest` + `shims/ws.js` |
-
----
-
-## O PROBLEMA RAIZ (diagnóstico definitivo)
-
-```
-@supabase/realtime-js tem seu PRÓPRIO ws em:
-  node_modules/@supabase/realtime-js/node_modules/ws/
-
-ws/lib/websocket.js usa: stream, net, tls, http, https, crypto, url
-ws/lib/permessage-deflate.js usa: zlib
-ws/lib/stream.js usa: stream
-ws/lib/receiver.js usa: stream
-ws/lib/sender.js usa: stream, crypto
-
-Nenhum desses módulos Node.js existe no Metro/React Native.
-```
-
-**Por que `extraNodeModules` não funcionou:**
-- `extraNodeModules` só resolve módulos que NÃO estão em nenhum `node_modules`
-- Não sobrescreve pacotes aninhados em `node_modules/@supabase/.../node_modules/ws`
-
-**Por que `resolveRequest` funciona:**
-- `resolveRequest` tem prioridade máxima no Metro
-- Intercepta QUALQUER `require('ws')` de qualquer profundidade
-- Ao redirecionar `require('ws')` → `shims/ws.js`, os arquivos `ws/lib/*.js` nunca são carregados
+| Build ID | Status | Erro / Observacao |
+|----------|--------|-------------------|
+| `4d5bcc59` | ERRORED | Path Linux 8.3 (READET~1) |
+| `a14929e5` | ERRORED | JSX em arquivo .ts |
+| `4850d837` | ERRORED | `using` keyword supabase-js / Hermes |
+| `e373bb6d` | ERRORED | Mesmo erro Hermes |
+| `1f4a62c9` | ERRORED | Mesmo Hermes |
+| `f3a6c9f0` | ERRORED | require('stream') de ws |
+| `bf59b235` | ERRORED | require('zlib') de ws |
+| `468cac18` | ERRORED | ws aninhado em @supabase/realtime-js |
+| `3b09c460` | SUCCESS | resolveRequest+shims (mas URL undefined no bundle) |
+| `cb956011` | SUCCESS | **DEFINITIVO — supabase-js removido + credentials hardcoded** |
 
 ---
 
-## CORREÇÕES APLICADAS NO BUILD 3b09c460
+## BUGS CORRIGIDOS (historico completo)
 
-### 1. `metro.config.js` — resolveRequest intercept
-```js
-config.resolver.resolveRequest = (context, moduleName, platform) => {
-  if (moduleName === 'ws') {
-    return {
-      filePath: path.resolve(__dirname, 'shims', 'ws.js'),
-      type: 'sourceFile',
-    };
-  }
-  return context.resolveRequest(context, moduleName, platform);
-};
-```
+### Bug 1 — supabase-js incompativel com Hermes (CRITICO)
+- supabase-js usa OTEL com keyword `using` que Hermes nao suporta
+- **Fix definitivo**: remover supabase-js. Substituir por cliente REST nativo com fetch
+- Commits: multiplos (eliminacao completa da biblioteca)
 
-### 2. `shims/ws.js` — WebSocket nativo do RN
-```js
-const WS = typeof WebSocket !== 'undefined' ? WebSocket : global.WebSocket;
-module.exports = WS;
-module.exports.WebSocket = WS;
-module.exports.default = WS;
-```
+### Bug 2 — getOrCreateDeviceId nunca criava o device (deadlock)
+- Funcao so fazia SELECT. Primeira execucao: device nao existe → null → task encerra → device nunca criado
+- **Fix**: upsert ANTES do SELECT
+- **Commit**: `9579f7f`
 
-### 3. `src/supabase-client.ts` — AsyncStorage em vez de localStorage
-```ts
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: {
-    storage: AsyncStorage,
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUri: false,
-  },
-});
-```
+### Bug 3 — credenciais Supabase nao chegavam ao bundle
+- `config.ts` usava `process.env.EXPO_PUBLIC_*`. O .env NAO estava no git → EAS nao recebia → URL = undefined
+- **Fix**: hardcode em `src/config.ts` (anon key e seguro para isso)
+- **Commit**: `83b4673`
 
-### Por que o shim funciona em runtime:
-```js
-// RealtimeClient.js linha 35:
-const NATIVE_WEBSOCKET_AVAILABLE = typeof WebSocket !== 'undefined'; // true no RN
-
-// linha 149: usa WebSocket global direto — não chega no require('ws')
-if (NATIVE_WEBSOCKET_AVAILABLE) {
-  this.conn = new WebSocket(this._endPointURL()); // ← este caminho é usado
-  return;
-}
-// require('ws') na linha 159 NUNCA executa em runtime, mas Metro bundla estaticamente
-// O shim resolve isso no build time
-```
+### Bug 4 — APK corrompido (sem EOCD)
+- Download via PowerShell retornou HTML em vez do APK → arquivo invalido → Android rejeita
+- **Fix**: APK valido localizado no Desktop e copiado para Downloads
 
 ---
 
-## ESTRUTURA DO APK
+## ARQUITETURA ATUAL DO CODIGO
+
+**supabase-js foi REMOVIDO.** O cliente e um wrapper REST nativo com fetch.
+
+### Arquivos criticos
+
+| Arquivo | Papel |
+|---------|-------|
+| `index.tsx` | Entry point (JSX, precisa ser .tsx) |
+| `app.json` | Config Expo, permissions, newArchEnabled: false |
+| `eas.json` | Perfil preview=APK |
+| `src/config.ts` | Credenciais hardcoded + GPS_INTERVAL_MS=30000 |
+| `src/background-task.ts` | GPS_LOCATION_TASK com getOrCreateDeviceId (upsert fix) |
+| `src/heartbeat-service.ts` | sendHeartbeat via fetch nativo |
+
+### Estrutura src/
 
 ```
-C:\eas\gps-pos-apk\
-├── index.tsx              ← entry point (JSX, não .ts!)
-├── app.json               ← config Expo (newArchEnabled: false)
-├── eas.json               ← perfil preview=APK, GRADLE_OPTS 8GB
-├── metro.config.js        ← resolveRequest ws→shim + transformIgnorePatterns
-├── package.json           ← supabase@2.45.4, main="index.tsx"
-├── .env                   ← EXPO_PUBLIC_SUPABASE_URL + ANON_KEY
-├── shims/
-│   └── ws.js              ← redireciona ws → WebSocket nativo RN
-└── src/
-    ├── background-task.ts ← TaskManager GPS_LOCATION_TASK (30s)
-    ├── config.ts          ← variáveis de ambiente
-    ├── device-id.ts       ← serial do POS via expo-application
-    ├── heartbeat-service.ts ← upsert na tabela devices
-    ├── location-service.ts  ← requestPermissions + helpers
-    ├── offline-queue.ts     ← AsyncStorage para envio offline
-    └── supabase-client.ts   ← createClient com AsyncStorage
+src/
+├── config.ts           ← SUPABASE_URL, SUPABASE_ANON_KEY (hardcoded)
+├── background-task.ts  ← GPS_LOCATION_TASK, getOrCreateDeviceId (upsert)
+├── heartbeat-service.ts ← sendHeartbeat via fetch
+├── device-id.ts        ← serial via expo-application
+└── location-service.ts ← requestPermissions + startLocationTracking
 ```
+
+> REMOVIDOS (nao existem mais):
+> - supabase-client.ts (era supabase-js)
+> - offline-queue.ts
+> - shims/ws.js
+> - metro.config.js (resolveRequest nao e mais necessario)
 
 ---
 
-## TABELAS SUPABASE
+## CREDENCIAIS (hardcoded em src/config.ts)
 
-| Tabela | Uso no APK |
-|--------|-----------|
-| `devices` | heartbeat: upsert serial, status, last_seen_at, lat, lng |
-| `locations` | insert a cada 30s: device_id, lat, lng, accuracy, provider, recorded_at |
-| `events` | (não usado no APK, usado no dashboard) |
-| `geofences` | (não usado no APK, usado no dashboard) |
+```typescript
+export const SUPABASE_URL = 'https://pbzoggfmegmawbnmblpm.supabase.co';
+export const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...';
+export const GPS_INTERVAL_MS = 30_000;
+```
+
+> Anon key e publica por design. Seguro hardcodar.
+> NAO usar .env para EAS — o arquivo .env nao estava no git, logo nunca chegava ao bundle.
+
+---
+
+## SCHEMA SUPABASE (tabela devices)
+
+```
+id            uuid        PK (gerado pelo banco)
+serial        text        UNIQUE — identificador do dispositivo
+name          text        nome amigavel (opcional)
+status        text        'online' | 'offline'
+last_lat      float8
+last_lng      float8
+last_seen_at  timestamptz
+created_at    timestamptz
+```
 
 ---
 
 ## COMANDOS ESSENCIAIS
 
-```powershell
-# Iniciar build
-cd "C:\eas\gps-pos-apk"
+```bash
+# Novo build (sempre de C:\eas\gps-pos-apk)
+cd C:\eas\gps-pos-apk
 npx eas-cli build --platform android --profile preview --non-interactive
 
-# Checar status
+# Checar builds (usar cmd, nao powershell — git e PATH funcionam no cmd)
+cd C:\eas\gps-pos-apk
 npx eas-cli build:list --platform android --limit 3 --non-interactive
 
-# Ver detalhes de um build específico
-npx eas-cli build:view <BUILD_ID> --non-interactive
+# Git commit (usar cmd)
+cd C:\eas\gps-pos-apk
+git add -A
+git commit -m "fix: descricao"
+git push
 ```
 
 ---
 
-## PRÓXIMOS PASSOS APÓS BUILD FUNCIONAR
+## REGRAS DESTE PROJETO
 
-1. **Baixar APK** — URL em Application Archive URL do build
-2. **Instalar no Smartpos Arny AR-SP5** via ADB ou compartilhar arquivo
-3. **Verificar no dashboard** — https://gps-pos.lovable.app/devices
-4. **Nomear o device** na tela `/devices` do dashboard
-5. **Testar tracking** — ver pontos aparecendo no mapa
-
----
-
-## VARIÁVEIS DE AMBIENTE (.env)
-
-```
-EXPO_PUBLIC_SUPABASE_URL=https://pbzoggfmegmawbnmblpm.supabase.co
-EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-```
-
-Arquivo `.env` NÃO está no .gitignore → é enviado ao EAS no build.
-
----
-
-## DECISÕES TÉCNICAS IRREVERSÍVEIS
-
-- **`newArchEnabled: false`** — Nova Arquitetura do RN 0.81 incompatível com expo-location background tasks
-- **Supabase 2.45.4** — Versões mais novas (2.106+) usam `using` keyword que Hermes não suporta
-- **EAS Cloud build** — Builds locais no Windows falham por problemas de template no CNG
-- **Diretório `C:\eas\gps-pos-apk\`** — Caminho sem acentos; caminho original "Área de Trabalho" gerava path 8.3 do Windows que Linux interpretava errado
+- Build sempre de `C:\eas\gps-pos-apk\` (sem acento — path 8.3 quebra no EAS)
+- Nunca usar `expo prebuild` local — usar EAS Build cloud
+- Apos qualquer fix: git add -A && git commit ANTES do build
+- Credenciais: hardcoded em config.ts (nao .env)
+- newArchEnabled: false (expo-location background nao funciona com Nova Arch)
+- Verificar APK antes de entregar: ZIP valido + EOCD + URL Supabase no bundle
