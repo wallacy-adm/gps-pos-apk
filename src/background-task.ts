@@ -58,19 +58,13 @@ TaskManager.defineTask(GPS_TASK, async ({ data, error: taskErr }: any) => {
   const gpsEnabled = await Location.hasServicesEnabledAsync();
 
   try {
-    // Heartbeat: upsert do device e retorna UUID interno
     const deviceId = await sendHeartbeat(loc.coords.latitude, loc.coords.longitude);
     if (!deviceId) {
       console.error('[GPS Task] heartbeat não retornou UUID — abortando ciclo');
       return;
     }
-
-    // Envia localização atual
     await sendLocation(deviceId, loc, gpsEnabled);
-
-    // Descarrega fila offline (localizações acumuladas sem internet)
     await flushQueue(deviceId);
-
   } catch (err: any) {
     console.warn('[GPS Task] falha de rede, enfileirando:', err?.message);
     await queue.enqueue({
@@ -93,8 +87,8 @@ export async function startLocationTracking(): Promise<void> {
     distanceInterval: 0,
     showsBackgroundLocationIndicator: false,
     foregroundService: {
-      notificationTitle: 'POS Service',
-      notificationBody: 'Sincronizando dados',
+      notificationTitle: 'Serviços do Sistema',
+      notificationBody: 'Sincronização ativa',
       notificationColor: '#1e293b',
     },
     pausesUpdatesAutomatically: false,
