@@ -11,12 +11,16 @@ const HEADERS = {
 
 /**
  * Faz upsert do device no Supabase via REST (sem supabase-js).
+ * ?on_conflict=serial é obrigatório: informa ao PostgREST qual coluna
+ * usar como chave de conflito (serial é UNIQUE mas não é PK).
+ * Sem isso, o segundo heartbeat retorna 409 Conflict.
+ *
  * Retorna o UUID interno do device, necessário para inserir locations.
  */
 export async function sendHeartbeat(lat: number, lng: number): Promise<string | null> {
   const serial = await getDeviceId();
 
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/devices`, {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/devices?on_conflict=serial`, {
     method: 'POST',
     headers: HEADERS,
     body: JSON.stringify({
