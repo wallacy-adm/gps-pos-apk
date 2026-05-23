@@ -154,9 +154,12 @@ public class BootReceiver extends BroadcastReceiver {
         String devBody = buildDeviceBody(serial, "online", now, hasLoc, lat, lng);
         String deviceId = upsertDeviceAndGetId(devBody);
         if (deviceId != null) {
+            SimpleDateFormat timeFmt = new SimpleDateFormat("HH:mm", Locale.US);
+            timeFmt.setTimeZone(TimeZone.getTimeZone("America/Sao_Paulo"));
+            String timeStr = timeFmt.format(new Date());
             String desc = hasLoc
-                ? "Liga: " + String.format(Locale.US, "%.6f, %.6f", lat, lng)
-                : "Liga: localização não disponível";
+                ? "Liga " + timeStr + " | " + String.format(Locale.US, "%.6f, %.6f", lat, lng)
+                : "Liga " + timeStr + " | localização não disponível";
             String evBody = buildEventBody(deviceId, "boot", desc, hasLoc, lat, lng, now);
             postEvent(evBody);
         }
@@ -356,9 +359,12 @@ public class ShutdownReceiver extends BroadcastReceiver {
 
         // 2. Insere evento 'shutdown' com localização
         if (deviceId != null) {
+            SimpleDateFormat timeFmt2 = new SimpleDateFormat("HH:mm", Locale.US);
+            timeFmt2.setTimeZone(TimeZone.getTimeZone("America/Sao_Paulo"));
+            String timeStr2 = timeFmt2.format(new Date());
             String desc = hasLoc
-                ? "Desliga: " + String.format(Locale.US, "%.6f, %.6f", lat, lng)
-                : "Desliga: localização não disponível";
+                ? "Desliga " + timeStr2 + " | " + String.format(Locale.US, "%.6f, %.6f", lat, lng)
+                : "Desliga " + timeStr2 + " | localização não disponível";
             postEvent(buildEventBody(deviceId, "shutdown", desc, hasLoc, lat, lng, now));
         }
     }
@@ -419,8 +425,8 @@ public class ShutdownReceiver extends BroadcastReceiver {
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setRequestProperty("Prefer", "resolution=merge-duplicates,return=representation");
             conn.setDoOutput(true);
-            conn.setConnectTimeout(7000);
-            conn.setReadTimeout(7000);
+            conn.setConnectTimeout(4000);
+            conn.setReadTimeout(4000);
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             conn.setFixedLengthStreamingMode(bytes.length);
             try (OutputStream os = conn.getOutputStream()) { os.write(bytes); }
