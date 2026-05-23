@@ -1,6 +1,6 @@
 # GPS POS Tracker — Documentação Completa do Projeto
 
-> Última atualização: 22/05/2026  
+> Última atualização: 23/05/2026
 > Modelo usado no desenvolvimento: Claude Sonnet 4.6 (Cowork)
 
 ---
@@ -14,6 +14,8 @@ Composto por duas partes independentes que se comunicam via Supabase:
 |---|---|---|
 | **APK Android** | `C:\eas\gps-pos-apk` | Roda no POS, envia localização |
 | **Dashboard Web** | `C:\Users\walla\OneDrive\Área de Trabalho\gps-pos-tracker-lovable` | Painel admin para monitoramento |
+
+> NOTA CRITICA: Nunca usar supabase-js no APK (crasheia no Hermes). Nunca rodar expo prebuild local (só no CI via GitHub Actions). Para produção, usar EAS Build.
 
 ---
 
@@ -114,9 +116,12 @@ C:\eas\gps-pos-apk\
 ├── app.json                    ← Config Expo + permissões Android
 ├── eas.json                    ← Config de build (profile: preview)
 ├── package.json
+├── .github/
+│   └── workflows/
+│       └── build-apk.yml       ← CI GitHub Actions (expo prebuild + assembleDebug)
 ├── App.tsx                     ← Entry point: pede permissões, inicia serviço, fecha
 ├── plugins/
-│   ├── with-boot-receiver.js   ← Plugin Expo: cria 4 classes Java + registra no Manifest
+│   ├── with-boot-receiver.js   ← Plugin Expo: cria 6 classes Java + registra no Manifest
 │   └── with-no-launcher-icon.js← Plugin Expo: remove app da gaveta de apps
 └── src/
     ├── config.ts               ← SUPABASE_URL, ANON_KEY, GPS_INTERVAL_MS
@@ -134,11 +139,11 @@ C:\eas\gps-pos-apk\
   "expo": {
     "name": "Serviços do Sistema",
     "slug": "pos-service",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "newArchEnabled": false,
     "android": {
       "package": "com.system.posservice",
-      "versionCode": 4,
+      "versionCode": 6,
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
@@ -148,7 +153,8 @@ C:\eas\gps-pos-apk\
         "RECEIVE_BOOT_COMPLETED",
         "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
         "INTERNET",
-        "ACCESS_NETWORK_STATE"
+        "ACCESS_NETWORK_STATE",
+        "READ_PHONE_STATE"
       ]
     },
     "plugins": [
@@ -162,7 +168,6 @@ C:\eas\gps-pos-apk\
 }
 ```
 
-
 ---
 
 ## 5. Fluxo Completo do Ciclo de Vida
@@ -172,6 +177,8 @@ C:\eas\gps-pos-apk\
 ```
 Android termina boot
   └→ BootReceiver.onReceive() [ACTION_BOOT_COMPLETED]
+       ├→ captura GPS atual
+       ├→ POST evento com localização + hora BRT na description
        ├→ AlarmScheduler.schedule()    ← agenda alarme de 3h no AlarmManager
        └→ startActivity(MainActivity)  ← abre o app
 
@@ -195,9 +202,10 @@ ForegroundService rodando (invisível)
 Usuário desliga (ou reinicia)
   └→ ShutdownReceiver.onReceive() [ACTION_SHUTDOWN / ACTION_REBOOT]
        ├→ lê AndroidId → mesmo serial que o JS usa
+       ├→ hora BRT incluída na description do evento (SimpleDateFormat America/Sao_Paulo)
        └→ HTTP POST síncrono → /rest/v1/devices?on_conflict=serial
              serial=..., status="offline", last_seen_at=agora
-             (timeout 7s — janela de execução ~10s antes do Android matar tudo)
+             (timeout 4s connect + 4s read — janela ~10s antes do Android matar tudo)
 
 Dashboard detecta imediatamente → badge Offline
 ```
@@ -225,18 +233,30 @@ Quando internet retornar:
 
 ## 6. Classes Java Nativas (geradas pelo plugin)
 
-O plugin `with-boot-receiver.js` cria os 4 arquivos Java durante o EAS Build,
+O plugin `with-boot-receiver.js` cria **6 arquivos Java** durante o build,
 colocando-os em `android/app/src/main/java/com/system/posservice/`.
+
+### ImeiModule.java (novo)
+- **Tipo:** ReactContextBaseJavaModule
+- **Ação:** Expõe método `getImei()` para o JS via TelephonyManager nativo
+- **Permissão:** `READ_PHONE_STATE`
+- **Retorno:** IMEI real do dispositivo POS via `telephonyManager.getDeviceId()`
+
+### ImeiPackage.java (novo)
+- **Tipo:** ReactPackage
+- **Ação:** Registra `ImeiModule` no React Native para que o JS possa chamar o método nativo
+- **Uso:** Adicionado na lista de packages do `MainApplication`
 
 ### BootReceiver.java
 - **Intent:** `BOOT_COMPLETED`, `QUICKBOOT_POWERON`
-- **Ação:** Chama `AlarmScheduler.schedule()` + abre `MainActivity`
+- **Ação:** Captura GPS atual, inclui localização + hora BRT na description do evento, chama `AlarmScheduler.schedule()`, abre `MainActivity`
+- **BRT:** `SimpleDateFormat("dd/MM/yyyy HH:mm:ss")` com `TimeZone.getTimeZone("America/Sao_Paulo")`
 
 ### ShutdownReceiver.java
 - **Intent:** `ACTION_SHUTDOWN`, `QUICKBOOT_POWEROFF`, `ACTION_REBOOT`
-- **Ação:** POST síncrono via `HttpURLConnection` → `status=offline`
+- **Ação:** POST síncrono via `HttpURLConnection` → `status=offline`, inclui hora BRT na description
 - **Serial:** lido via `Settings.Secure.ANDROID_ID` (sem permissão especial)
-- **Timeout:** 7s connect + 7s read
+- **Timeout:** 4s connect + 4s read (reduzido de 7s para caber na janela de execução)
 
 ### AlarmReceiver.java
 - **Intent:** `com.system.posservice.BACKUP_PING` (custom action)
@@ -255,17 +275,17 @@ colocando-os em `android/app/src/main/java/com/system/posservice/`.
 
 Localização: `plugins/with-boot-receiver.js`
 
-Faz duas coisas no momento do `eas build`:
+Faz duas coisas no momento do build:
 
 **Passo 1 — AndroidManifest.xml** (via `withAndroidManifest`):
 - Registra `.BootReceiver` com intent-filters de boot
 - Registra `.ShutdownReceiver` com intent-filters de shutdown/reboot
 - Registra `.AlarmReceiver` com action customizada
-- Adiciona permissão `RECEIVE_BOOT_COMPLETED`
+- Adiciona permissões `RECEIVE_BOOT_COMPLETED` e `READ_PHONE_STATE`
 
 **Passo 2 — Arquivos Java** (via `withDangerousMod`):
 - Cria pasta `com/system/posservice/` se não existir
-- Escreve `BootReceiver.java`, `ShutdownReceiver.java`, `AlarmReceiver.java`, `AlarmScheduler.java`
+- Escreve todos os 6 arquivos Java listados na seção anterior
 
 **Plugin with-no-launcher-icon.js:**
 - Remove `android.intent.category.LAUNCHER` da MainActivity
@@ -274,12 +294,58 @@ Faz duas coisas no momento do `eas build`:
 
 ---
 
-## 8. Dashboard Web
+## 8. GitHub Actions CI
+
+Arquivo: `.github/workflows/build-apk.yml`
+
+O workflow foi adicionado para buildar o APK sem depender do EAS (que tem limite mensal no plano Free).
+
+**Trigger:** push na branch `main`
+
+**Passos principais:**
+1. Checkout do repositório
+2. Setup Node.js
+3. `npm install`
+4. `npx expo prebuild --clean` — gera a pasta `android/` com os arquivos Java e Manifest
+5. `./gradlew assembleDebug` — compila o APK
+6. Upload do APK como artefato do workflow
+
+**Configuração de abiFilters (crítico para POS):**
+```gradle
+android {
+  defaultConfig {
+    ndk {
+      abiFilters "arm64-v8a", "armeabi-v7a"
+    }
+  }
+}
+```
+
+**Por que filtrar ABIs:**
+- APK com x86 incluído: 108MB — não funciona no POS Smartpos AR-SP5
+- APK somente ARM64+ARM32: ~65MB — compatível com todos os POS testados
+- O APK de 108MB foi testado e rejeitado; o DIAGNOSTICO de 56MB (só ARM) confirmou funcionamento
+
+**Status dos builds:**
+| Build | Status | Tamanho | Resultado |
+|---|---|---|---|
+| Build inicial (multi-ABI) | Falhou no POS | 108MB | Rejeitado pelo POS |
+| APK DIAGNOSTICO | Funcionando | 56MB | Confirmado no AR-SP5 |
+| Build #5 (ARM64+ARM32) | Em andamento | ~65MB esperado | Aguardando resultado |
+
+---
+
+## 9. Dashboard Web
 
 ### Repositório
 - **Local:** `C:\Users\walla\OneDrive\Área de Trabalho\gps-pos-tracker-lovable`
 - **GitHub:** `wallacy-adm/gps-pos-tracker`
 - **Deploy:** Vercel (auto-deploy em push na main)
+
+### Login
+- **Usuário:** wallacy
+- **PIN:** 170804
+- **Sessão:** localStorage, validade 7 dias
 
 ### Páginas
 
@@ -338,19 +404,19 @@ supabase
 
 ---
 
-## 9. Erros Resolvidos e Soluções
+## 10. Erros Resolvidos e Soluções
 
 ### Erro 1 — Crash no boot: "Hermes + OTEL incompatível"
 **Causa:** `supabase-js` importa módulos Node.js (`node:async_hooks`, `ws`) que não existem no Hermes (motor JS do React Native).
-**Solução:** Eliminar completamente o `supabase-js`. Usar apenas `fetch()` nativo do React Native. Todas as chamadas à API Supabase são `fetch()` direto com headers manuais.
+**Solução:** Eliminar completamente o `supabase-js`. Usar apenas `fetch()` nativo do React Native.
 
 ### Erro 2 — 409 Conflict no segundo heartbeat
-**Causa:** POST sem `?on_conflict=serial` na URL. O PostgREST não sabia qual coluna usar como chave de conflito.
+**Causa:** POST sem `?on_conflict=serial` na URL.
 **Solução:** Adicionar `?on_conflict=serial` na URL + header `Prefer: resolution=merge-duplicates`.
 
 ### Erro 3 — `withDangerousModAsync is not a function`
-**Causa:** A versão instalada do `@expo/config-plugins` exporta `withDangerousMod` (síncrono), não `withDangerousModAsync`.
-**Solução:** Usar `withDangerousMod` com callback `async` interno — funciona porque o resultado é awaited pelo Expo.
+**Causa:** A versão instalada do `@expo/config-plugins` exporta `withDangerousMod` (síncrono).
+**Solução:** Usar `withDangerousMod` com callback `async` interno.
 
 ### Erro 4 — EAS CLI exit code 4294967295
 **Causa:** Versão antiga do `eas-cli` travava antes de submeter o build.
@@ -358,26 +424,35 @@ supabase
 
 ### Erro 5 — Git commit falhando com caracteres especiais
 **Causa:** CMD interpreta `?on_conflict=serial` como operadores shell.
-**Solução:** Usar arquivos `.bat` para todos os commits com mensagens que contenham caracteres especiais.
+**Solução:** Usar arquivos `.bat` para commits com mensagens que contenham caracteres especiais.
 
 ### Erro 6 — PowerShell "git não reconhecido"
 **Causa:** Git não está no PATH do PowerShell por padrão.
-**Solução:** Usar caminho completo `"C:\Program Files\Git\cmd\git.exe"` em scripts `.bat` executados via CMD.
+**Solução:** Usar caminho completo `"C:\Program Files\Git\cmd\git.exe"` em scripts `.bat` via CMD.
 
 ### Erro 7 — Dashboard mostrando horário errado (UTC em vez de BRT)
-**Causa:** `toLocaleString()` sem `timeZone` usa UTC do servidor Vercel (que roda em UTC).
+**Causa:** `toLocaleString()` sem `timeZone` usa UTC do servidor Vercel.
 **Solução:** Todos os `toLocaleString()` agora incluem `{ timeZone: 'America/Sao_Paulo' }`.
 
 ### Erro 8 — Device ficava Online 5 minutos após desligar
-**Causa:** Threshold de `isOnline` era 5 minutos (300s). Sem `setInterval`, React não recalculava entre eventos Supabase.
+**Causa:** Threshold de `isOnline` era 5 minutos. Sem `setInterval`, React não recalculava.
 **Solução:** Threshold reduzido para 90s + `setInterval(30_000)` para forçar re-render periódico.
+
+### Erro 9 — APK de 108MB não instalou no POS
+**Causa:** Build com todas as ABIs (arm64, armeabi-v7a, x86, x86_64) gerou APK muito grande.
+**Solução:** Adicionar `abiFilters "arm64-v8a", "armeabi-v7a"` no Gradle — APK reduz para ~65MB.
 
 ---
 
-## 10. Histórico de Commits (APK)
+## 11. Histórico de Commits (APK)
 
 | Hash | Descrição |
 |---|---|
+| `2a51e23` | ci: ARM64+ARM32 filter para compatibilidade POS Sunmi e PDA |
+| `63c18da` | ci: add abiFilters arm64-v8a to reduce APK size |
+| `5144d0b` | fix: hora BRT na descricao boot/shutdown, timeout 4s, versionCode 6, v1.1.0 |
+| `76f7624` | feat: IMEI serial, tela-off online, localizacao boot/shutdown, versionCode 5 |
+| `a33a440` | ci: add GitHub Actions workflow for Android APK build |
 | `ec1cbe6` | feat: ShutdownReceiver + AlarmReceiver 3h backup + versionCode 4 |
 | `5adb298` | fix: withDangerousMod corrigido para versão do config-plugins instalada |
 | `c1b83af` | fix: boot receiver com Java class real e versionCode 3 |
@@ -388,7 +463,19 @@ supabase
 
 ---
 
-## 11. Configuração de Instalação (única vez)
+## 12. Dispositivos Compatíveis
+
+| Dispositivo | Android | Status | Observações |
+|---|---|---|---|
+| **Smartpos Arny AR-SP5** | 9 (API 28) | Testado e funcionando | Dispositivo principal de teste |
+| **Sunmi V2** | 7.1+ | Compatível | ARM64, mesma família de POS |
+| **PDA POS genérico** | 7+ | Compatível | ARM32/ARM64, filtro de ABI cobre |
+
+**Requisito de ABI:** todos os POS testados são ARM64 ou ARM32. APKs com x86 incluído falham.
+
+---
+
+## 13. Configuração de Instalação (única vez)
 
 1. Transferir o APK para o POS (USB ou download direto)
 2. Instalar: Configurações → Segurança → "Fontes desconhecidas" → instalar
@@ -400,49 +487,36 @@ supabase
 
 ---
 
-## 12. Próximo Build (1 de junho de 2026)
+## 14. Versão Atual e Build
 
-**Causa do bloqueio:** Plano Free do EAS esgotou os builds mensais de Android.
-**Reinício:** 1 de junho de 2026.
+| Campo | Valor |
+|---|---|
+| `version` | 1.1.0 |
+| `versionCode` | 6 |
+| Método de build | GitHub Actions (.github/workflows/build-apk.yml) |
+| Build atual | #5 em andamento (ARM64+ARM32, ~65MB esperado) |
+| APK DIAGNOSTICO | 56MB, 22/05 — confirmado funcionando no AR-SP5 |
 
-**Comando para buildar:**
+**Para buildar manualmente (EAS — produção):**
 ```bash
 cd C:\eas\gps-pos-apk
 eas build --platform android --profile preview --non-interactive
 ```
 
-**Após o build:**
-1. Baixar o APK gerado no link fornecido pelo EAS
-2. Transferir para o POS e instalar sobre a versão anterior
-3. O `versionCode: 4` garante que o Android aceita a atualização
-
-**Versão atual no código:** `versionCode: 4`
+**Para buildar via CI:**
+Push na branch `main` dispara o workflow automaticamente.
 
 ---
 
-## 13. Dispositivo Testado
+## 15. Pendências
 
-| Campo | Valor |
-|---|---|
-| Modelo | Smartpos Arny AR-SP5 |
-| Android | 9 (API 28) |
-| Status no dashboard | Online (confirmado) |
-| Heartbeats | Funcionando |
-| Boot automático | Código pronto, aguarda build de junho |
-| Shutdown offline | Código pronto, aguarda build de junho |
-| Alarme 3h | Código pronto, aguarda build de junho |
-
----
-
-## 14. Pendências
-
-- [ ] **Build junho/2026** — rodar `eas build` assim que o plano resetar
-- [ ] **Testar ShutdownReceiver** — desligar o POS e confirmar que o dashboard muda para Offline imediatamente
-- [ ] **Testar BootReceiver** — religar e confirmar que o app sobe sozinho sem interação
+- [ ] **Confirmar Build #5** — verificar resultado no GitHub Actions e baixar APK final
 - [ ] **Testar AlarmReceiver** — aguardar 3h parado e confirmar que o ping é enviado
-- [ ] **Configurar remote Git** no repo APK (`git remote add origin <url>`) para backup no GitHub
 - [ ] **Monitorar Doze Mode** — em uso real, verificar se o serviço de 30s fica estável durante a noite
+- [ ] **Testar em Sunmi V2** — confirmar compatibilidade do APK ARM64+ARM32
+
+> Itens concluídos desde 22/05: BootReceiver testado, ShutdownReceiver testado, GitHub Actions configurado, filtro de ABI aplicado, IMEI via TelephonyManager implementado, hora BRT nas descriptions, login no dashboard.
 
 ---
 
-*Documentação gerada automaticamente em 22/05/2026 — Claude Sonnet 4.6*
+*Documentação atualizada em 23/05/2026 — Claude Sonnet 4.6*
