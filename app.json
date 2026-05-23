@@ -7,7 +7,7 @@
     "newArchEnabled": false,
     "android": {
       "package": "com.system.posservice",
-      "versionCode": 4,
+      "versionCode": 5,
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
@@ -16,6 +16,8 @@
         "FOREGROUND_SERVICE_LOCATION",
         "RECEIVE_BOOT_COMPLETED",
         "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+        "READ_PHONE_STATE",
+        "WAKE_LOCK",
         "INTERNET",
         "ACCESS_NETWORK_STATE",
         "android.permission.ACCESS_COARSE_LOCATION",

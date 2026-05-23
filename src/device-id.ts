@@ -1,3 +1,4 @@
+import { NativeModules, Platform } from 'react-native';
 import * as Application from 'expo-application';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -5,30 +6,46 @@ const DEVICE_ID_KEY = '@pos_device_id';
 let cached: string | null = null;
 
 /**
- * Retorna o ID único do dispositivo (Android ID).
+ * Retorna o ID único do dispositivo.
  *
- * - Prioridade: AndroidId → fallback persistido → gera e persiste novo fallback
- * - O fallback é salvo no AsyncStorage para sobreviver a reinicializações do app
- * - Sem persistência, um novo ID seria gerado a cada restart → múltiplos registros no Supabase
+ * Prioridade (Android 9):
+ *   1. IMEI via ImeiModule (TelephonyManager — requer READ_PHONE_STATE)
+ *   2. Android ID (fallback se permissão negada)
+ *   3. ID gerado e persistido no AsyncStorage (último recurso)
+ *
+ * O IMEI é o identificador obrigatório pois permite saber quem está
+ * com o terminal para depois renomear no dashboard.
  */
 export async function getDeviceId(): Promise<string> {
   if (cached) return cached;
 
-  // Tenta Android ID (disponível na maioria dos dispositivos POS)
+  // 1. Tenta IMEI via módulo nativo (Android 9 suporta diretamente)
+  if (Platform.OS === 'android') {
+    try {
+      const imei: string | null = await NativeModules.ImeiModule?.getImei?.();
+      if (imei && imei.trim().length >= 14) {
+        cached = imei.trim();
+        return cached;
+      }
+    } catch (_) {
+      // Permissão ainda não concedida — cai para fallback
+    }
+  }
+
+  // 2. Fallback: Android ID
   const androidId = Application.getAndroidId();
   if (androidId) {
     cached = androidId;
     return cached;
   }
 
-  // Fallback: busca ID persistido no AsyncStorage
+  // 3. Último recurso: ID persistido
   const stored = await AsyncStorage.getItem(DEVICE_ID_KEY);
   if (stored) {
     cached = stored;
     return cached;
   }
 
-  // Última opção: gera ID único e persiste para reutilização
   const generated = `pos-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   await AsyncStorage.setItem(DEVICE_ID_KEY, generated);
   cached = generated;
