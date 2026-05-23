@@ -39,7 +39,7 @@ jobs:
         env:
           EXPO_NO_TELEMETRY: 1
 
-      - name: Forcar apenas arm64-v8a (POS = ARM64, reduz APK ~50%)
+      - name: Filtrar apenas ARM (exclui x86 — nunca usado em POS reais)
         run: |
           python3 << 'EOF'
           import re
@@ -47,15 +47,16 @@ jobs:
           with open('android/app/build.gradle', 'r') as f:
               content = f.read()
 
+          # Inclui arm64-v8a (POS moderno/Sunmi) + armeabi-v7a (POS antigo/PDA basico)
+          # Exclui x86 e x86_64 (emuladores e PCs — nao sao POS)
           if 'abiFilters' not in content:
-              # Injeta ndk block logo apos a abertura de defaultConfig {
               content = re.sub(
                   r'(defaultConfig \{)',
-                  '\\1\n        ndk {\n            abiFilters "arm64-v8a"\n        }',
+                  '\\1\n        ndk {\n            abiFilters "arm64-v8a", "armeabi-v7a"\n        }',
                   content,
                   count=1
               )
-              print("ABI filter arm64-v8a adicionado com sucesso")
+              print("ABI filter ARM64 + ARM32 adicionado — compativel com todos os POS")
           else:
               print("ABI filter ja existia no build.gradle")
 
