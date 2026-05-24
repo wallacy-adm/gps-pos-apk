@@ -34,70 +34,12 @@ jobs:
       - name: Instalar dependencias npm
         run: npm ci
 
-      - name: Expo Prebuild (gera pasta android/)
+      - name: Expo Prebuild
         run: npx expo prebuild --platform android --clean
         env:
           EXPO_NO_TELEMETRY: 1
 
-      - name: Configurar build.gradle (ARM filter + signing + release standalone)
-        run: |
-          python3 << 'EOF'
-          import re
-
-          with open('android/app/build.gradle', 'r') as f:
-              content = f.read()
-
-          # 1. Filtrar apenas ARM (exclui x86 — nunca usado em POS reais)
-          if 'abiFilters' not in content:
-              content = re.sub(
-                  r'(defaultConfig \{)',
-                  '\\1\n        ndk {\n            abiFilters "arm64-v8a", "armeabi-v7a"\n        }',
-                  content,
-                  count=1
-              )
-              print("ABI filter ARM64+ARM32 adicionado")
-          else:
-              print("ABI filter ja existia")
-
-          # 2. Adicionar signingConfigs antes de buildTypes
-          signing_block = '''
-      signingConfigs {
-          standalone {
-              storeFile file("standalone.keystore")
-              storePassword "standalone"
-              keyAlias "standalone"
-              keyPassword "standalone"
-          }
-      }
-  '''
-          if 'signingConfigs' not in content:
-              content = re.sub(
-                  r'(\s+buildTypes\s*\{)',
-                  signing_block + r'\1',
-                  content,
-                  count=1
-              )
-              print("signingConfigs adicionado")
-
-          # 3. Configurar release build: assinar + sem ProGuard + sem shrinkResources
-          #    Substitui o bloco release { ... } para garantir configuracao correta
-          release_config = '''release {
-              signingConfig signingConfigs.standalone
-              minifyEnabled false
-              shrinkResources false'''
-          content = re.sub(
-              r'release\s*\{',
-              release_config,
-              content,
-              count=1
-          )
-          print("Release build configurado: signing + minifyEnabled false")
-
-          with open('android/app/build.gradle', 'w') as f:
-              f.write(content)
-          EOF
-
-      - name: Gerar keystore de assinatura (standalone — instalacao direta sem Play Store)
+      - name: Gerar keystore de assinatura
         run: |
           keytool -genkeypair \
             -keystore android/app/standalone.keystore \
@@ -105,16 +47,16 @@ jobs:
             -keyalg RSA -keysize 2048 -validity 9000 \
             -dname "CN=Standalone,O=POS,C=BR" \
             -storepass standalone -keypass standalone
-          echo "Keystore gerado com sucesso"
+          echo "Keystore criado"
 
-      - name: Build APK Release (JS embutido — funciona sem Metro/internet)
+      - name: Configurar build.gradle
+        run: python3 .github/scripts/configure_gradle.py
+
+      - name: Build APK Release
         run: |
           cd android
           chmod +x ./gradlew
           ./gradlew assembleRelease --no-daemon --stacktrace
-        env:
-          JAVA_HOME: ${{ env.JAVA_HOME }}
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -123,8 +65,7 @@ jobs:
           path: android/app/build/outputs/apk/release/app-release.apk
           retention-days: 30
 
-      - name: Mostrar info do APK
+      - name: Info do APK
         run: |
           ls -lh android/app/build/outputs/apk/release/
-          echo "APK release gerado! JS embutido — funciona standalone no POS."
-          echo "Download em Actions > Artifacts > gps-pos-apk-${{ github.run_number }}"
+          echo "APK release OK - JS embutido, funciona standalone no POS"
