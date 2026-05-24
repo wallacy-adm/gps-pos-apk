@@ -1,8 +1,8 @@
 """
 Configura android/app/build.gradle para gerar APK release standalone:
-  1. abiFilters ARM64 + ARM32 (exclui x86 — nunca usado em POS reais)
-  2. signingConfigs com keystore gerado no CI
-  3. Release build: signingConfig + minifyEnabled false + shrinkResources false
+  1. abiFilters ARM64 + ARM32
+  2. signingConfig standalone dentro do bloco signingConfigs existente
+  3. release build: signingConfig + minifyEnabled false + shrinkResources false
 """
 import re
 import sys
@@ -24,30 +24,32 @@ if 'abiFilters' not in content:
 else:
     print("OK: abiFilters ja existia")
 
-# ── 2. signingConfigs ────────────────────────────────────────────────────────
-signing_block = (
-    "\n    signingConfigs {\n"
-    "        standalone {\n"
+# ── 2. Adiciona 'standalone' dentro do signingConfigs existente ──────────────
+# Expo prebuild ja cria signingConfigs { debug { ... } }
+# Precisamos inserir standalone { ... } dentro desse bloco
+standalone_entry = (
+    "\n        standalone {\n"
     "            storeFile file(\"standalone.keystore\")\n"
     "            storePassword \"standalone\"\n"
     "            keyAlias \"standalone\"\n"
     "            keyPassword \"standalone\"\n"
-    "        }\n"
-    "    }\n"
+    "        }"
 )
 
-if 'signingConfigs' not in content:
+if 'standalone' not in content:
+    # Insere apos 'signingConfigs {'
     content = re.sub(
-        r'(\s+buildTypes\s*\{)',
-        signing_block + r'\1',
+        r'(signingConfigs\s*\{)',
+        r'\1' + standalone_entry,
         content,
         count=1,
     )
-    print("OK: signingConfigs adicionado")
+    print("OK: signingConfigs.standalone adicionado")
 else:
-    print("OK: signingConfigs ja existia")
+    print("OK: standalone ja existia em signingConfigs")
 
-# ── 3. Release build: assinar + sem ProGuard ─────────────────────────────────
+# ── 3. Configura release build ───────────────────────────────────────────────
+# Substitui 'release {' pelo bloco com signing + sem ProGuard
 release_replacement = (
     "release {\n"
     "            signingConfig signingConfigs.standalone\n"
@@ -55,8 +57,11 @@ release_replacement = (
     "            shrinkResources false"
 )
 
-content = re.sub(r'release\s*\{', release_replacement, content, count=1)
-print("OK: release build configurado (signing + minifyEnabled false)")
+if 'signingConfigs.standalone' not in content.split('release')[1] if 'release' in content else True:
+    content = re.sub(r'release\s*\{', release_replacement, content, count=1)
+    print("OK: release build configurado (signing + minifyEnabled false)")
+else:
+    print("OK: release build ja configurado")
 
 with open(gradle_path, 'w') as f:
     f.write(content)
