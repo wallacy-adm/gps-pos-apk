@@ -77,6 +77,19 @@ public class ImeiModule extends ReactContextBaseJavaModule {
             promise.resolve(false);
         }
     }
+
+    @ReactMethod
+    public void isIgnoringBatteryOptimizations(Promise promise) {
+        try {
+            PowerManager pm = (PowerManager)
+                getReactApplicationContext().getSystemService(Context.POWER_SERVICE);
+            String pkg = getReactApplicationContext().getPackageName();
+            boolean ignoring = pm != null && pm.isIgnoringBatteryOptimizations(pkg);
+            promise.resolve(ignoring);
+        } catch (Exception e) {
+            promise.resolve(false);
+        }
+    }
 }
 `;
 
@@ -616,7 +629,7 @@ import android.os.Build;
 
 public class AlarmScheduler {
 
-    private static final long INTERVAL_MS = 3 * 60 * 60 * 1000L;
+    private static final long INTERVAL_MS = 5 * 60 * 1000L; // 5 minutos
 
     public static void schedule(Context context) {
         AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);

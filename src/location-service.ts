@@ -36,11 +36,32 @@ export async function requestPermissions(): Promise<boolean> {
       // Não bloqueia o serviço se falhar — usa fallback Android ID
     }
 
-    // Pede isenção de otimização de bateria — garante GPS com tela desligada/bloqueada
-    try {
-      await NativeModules.ImeiModule?.requestBatteryOptimizationExemption?.();
-    } catch (_) {}
   }
 
   return true;
+}
+
+/**
+ * Retorna true se o app já está na whitelist de isenção de bateria.
+ * Usa o método nativo isIgnoringBatteryOptimizations() do ImeiModule.
+ */
+export async function checkBatteryOptimization(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  try {
+    const result = await NativeModules.ImeiModule?.isIgnoringBatteryOptimizations?.();
+    return result === true;
+  } catch {
+    return true; // assume OK se falhar — não bloqueia o serviço
+  }
+}
+
+/**
+ * Abre a tela de Settings de otimização de bateria.
+ * Chamado manualmente pelo usuário (não fecha o app antes da resposta).
+ */
+export async function openBatterySettings(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  try {
+    await NativeModules.ImeiModule?.requestBatteryOptimizationExemption?.();
+  } catch (_) {}
 }
