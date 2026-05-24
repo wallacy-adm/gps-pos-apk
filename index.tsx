@@ -65,6 +65,21 @@ function App() {
     })();
   }, []);
 
+  /**
+   * Chamado ao apertar "ATIVAR AGORA".
+   * Se o dispositivo não suporta a tela de bateria (ex: ROMs de POS),
+   * retorna false e iniciamos o GPS diretamente sem bloquear o usuário.
+   */
+  const handleActivate = async () => {
+    const settingsOpened = await openBatterySettings();
+    if (!settingsOpened) {
+      // Dispositivo não suporta o dialog — prossegue sem isenção
+      setStep('done');
+      await launchAndClose();
+    }
+    // Se abriu, o AppState listener cuida do retorno do usuário
+  };
+
   // Quando usuário volta das configurações de bateria
   useEffect(() => {
     if (step !== 'battery') return;
@@ -120,7 +135,7 @@ function App() {
       </Text>
 
       <TouchableOpacity
-        onPress={openBatterySettings}
+        onPress={handleActivate}
         activeOpacity={0.8}
         style={{
           backgroundColor: '#3b82f6',
@@ -134,11 +149,21 @@ function App() {
         </Text>
       </TouchableOpacity>
 
+      <TouchableOpacity
+        onPress={launchAndClose}
+        activeOpacity={0.7}
+        style={{ marginTop: 20, padding: 8 }}
+      >
+        <Text style={{ color: '#475569', fontSize: 13, textDecorationLine: 'underline' }}>
+          Pular esta etapa
+        </Text>
+      </TouchableOpacity>
+
       <Text style={{
         color: '#475569',
         fontSize: 11,
         textAlign: 'center',
-        marginTop: 28,
+        marginTop: 16,
         lineHeight: 17,
       }}>
         Após permitir, este app fecha automaticamente.{'\n'}

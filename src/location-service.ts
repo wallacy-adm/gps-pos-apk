@@ -56,12 +56,17 @@ export async function checkBatteryOptimization(): Promise<boolean> {
 }
 
 /**
- * Abre a tela de Settings de otimização de bateria.
- * Chamado manualmente pelo usuário (não fecha o app antes da resposta).
+ * Tenta abrir a tela de isenção de bateria.
+ * Retorna true se a tela foi aberta (JS deve aguardar o usuário retornar).
+ * Retorna false se: já isento, dispositivo não suporta, ou erro.
+ * Nesse caso o JS deve prosseguir e iniciar o GPS sem esperar.
  */
-export async function openBatterySettings(): Promise<void> {
-  if (Platform.OS !== 'android') return;
+export async function openBatterySettings(): Promise<boolean> {
+  if (Platform.OS !== 'android') return false;
   try {
-    await NativeModules.ImeiModule?.requestBatteryOptimizationExemption?.();
-  } catch (_) {}
+    const opened = await NativeModules.ImeiModule?.requestBatteryOptimizationExemption?.();
+    return opened === true;
+  } catch (_) {
+    return false;
+  }
 }

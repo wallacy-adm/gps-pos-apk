@@ -61,19 +61,40 @@ public class ImeiModule extends ReactContextBaseJavaModule {
         }
     }
 
+    /**
+     * Retorna true SOMENTE se a tela de configurações foi aberta (usuário precisa agir).
+     * Retorna false se: já está isento, ou dispositivo não suporta o intent.
+     * O JS usa esse retorno para saber se deve esperar ou prosseguir direto.
+     */
     @ReactMethod
     public void requestBatteryOptimizationExemption(Promise promise) {
         try {
             PowerManager pm = (PowerManager)
                 getReactApplicationContext().getSystemService(Context.POWER_SERVICE);
             String pkg = getReactApplicationContext().getPackageName();
-            if (pm != null && !pm.isIgnoringBatteryOptimizations(pkg)) {
-                Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
-                intent.setData(Uri.parse("package:" + pkg));
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                getReactApplicationContext().startActivity(intent);
+
+            // Já está isento — não precisa abrir nada
+            if (pm != null && pm.isIgnoringBatteryOptimizations(pkg)) {
+                promise.resolve(false);
+                return;
             }
-            promise.resolve(true);
+
+            Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            intent.setData(Uri.parse("package:" + pkg));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+
+            // Verifica se o dispositivo tem alguma Activity que trata esse intent
+            // Alguns ROMs de POS não implementam essa tela → resolvemos false
+            boolean canHandle = getReactApplicationContext()
+                    .getPackageManager()
+                    .resolveActivity(intent, 0) != null;
+
+            if (canHandle) {
+                getReactApplicationContext().startActivity(intent);
+                promise.resolve(true);   // tela abriu, JS aguarda retorno
+            } else {
+                promise.resolve(false);  // dispositivo não suporta → JS prossegue direto
+            }
         } catch (Exception e) {
             promise.resolve(false);
         }
