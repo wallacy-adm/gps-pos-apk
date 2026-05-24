@@ -168,12 +168,16 @@ public class BootReceiver extends BroadcastReceiver {
         AlarmScheduler.schedule(context);
 
         // 5. Abre o app para iniciar o serviço GPS foreground
-        Intent launch = context.getPackageManager()
-                .getLaunchIntentForPackage(context.getPackageName());
-        if (launch != null) {
-            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        // getLaunchIntentForPackage retorna null se CATEGORY_LAUNCHER foi removido;
+        // usar setClassName garante que o launch funciona independente do manifest.
+        try {
+            Intent launch = new Intent();
+            launch.setClassName(context.getPackageName(),
+                    context.getPackageName() + ".MainActivity");
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                          | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             context.startActivity(launch);
-        }
+        } catch (Exception ignored) {}
     }
 
     private String getImei(Context context) {

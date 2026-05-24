@@ -2,12 +2,12 @@
   "expo": {
     "name": "Serviços do Sistema",
     "slug": "pos-service",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "orientation": "portrait",
     "newArchEnabled": false,
     "android": {
       "package": "com.system.posservice",
-      "versionCode": 6,
+      "versionCode": 7,
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
@@ -31,8 +31,7 @@
           "locationAlwaysAndWhenInUsePermission": "Necessário para sincronização do sistema."
         }
       ],
-      "./plugins/with-boot-receiver.js",
-      "./plugins/with-no-launcher-icon.js"
+      "./plugins/with-boot-receiver.js"
     ],
     "extra": {
       "eas": {
