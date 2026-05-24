@@ -1,6 +1,6 @@
 import { registerRootComponent } from 'expo';
 import { useEffect, useRef, useState } from 'react';
-import { AppState, AppStateStatus, BackHandler, Text, TouchableOpacity, View } from 'react-native';
+import { AppState, AppStateStatus, BackHandler, NativeModules, Text, TouchableOpacity, View } from 'react-native';
 import { startLocationTracking } from './src/background-task';
 import { checkBatteryOptimization, openBatterySettings, requestPermissions } from './src/location-service';
 
@@ -21,13 +21,26 @@ function App() {
   const [step, setStep] = useState<'loading' | 'battery' | 'done'>('loading');
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
+  /**
+   * Fecha apenas a Activity, mantendo o ForegroundService vivo.
+   * finishActivity() é preferido; BackHandler.exitApp() é fallback de emergência.
+   */
+  const closeActivity = async () => {
+    try {
+      const finished = await NativeModules.ImeiModule?.finishActivity?.();
+      if (!finished) BackHandler.exitApp();
+    } catch (_) {
+      BackHandler.exitApp();
+    }
+  };
+
   const launchAndClose = async () => {
     try {
       await startLocationTracking();
     } catch (_) {
       // Serviço pode já estar rodando — ignora
     }
-    BackHandler.exitApp();
+    await closeActivity();
   };
 
   // Inicialização: permissões → checar bateria
@@ -36,7 +49,7 @@ function App() {
       try {
         const granted = await requestPermissions();
         if (!granted) {
-          BackHandler.exitApp();
+          await closeActivity();
           return;
         }
         const exempt = await checkBatteryOptimization();
@@ -47,7 +60,7 @@ function App() {
         }
       } catch (_) {
         // Falha silenciosa — BootReceiver vai tentar novamente
-        BackHandler.exitApp();
+        await closeActivity();
       }
     })();
   }, []);

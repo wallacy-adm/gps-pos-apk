@@ -15,6 +15,7 @@ const ANON_KEY     = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const IMEI_MODULE_JAVA = `package com.system.posservice;
 
 import android.Manifest;
+import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -86,6 +87,25 @@ public class ImeiModule extends ReactContextBaseJavaModule {
             String pkg = getReactApplicationContext().getPackageName();
             boolean ignoring = pm != null && pm.isIgnoringBatteryOptimizations(pkg);
             promise.resolve(ignoring);
+        } catch (Exception e) {
+            promise.resolve(false);
+        }
+    }
+
+    /**
+     * Fecha apenas a Activity (não mata o processo nem o ForegroundService).
+     * Substitui BackHandler.exitApp() que chamava System.exit() e matava tudo.
+     */
+    @ReactMethod
+    public void finishActivity(Promise promise) {
+        try {
+            Activity activity = getCurrentActivity();
+            if (activity != null) {
+                activity.runOnUiThread(() -> activity.finish());
+                promise.resolve(true);
+            } else {
+                promise.resolve(false);
+            }
         } catch (Exception e) {
             promise.resolve(false);
         }
