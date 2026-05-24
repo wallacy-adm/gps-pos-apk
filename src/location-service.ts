@@ -1,5 +1,5 @@
 import * as Location from 'expo-location';
-import { PermissionsAndroid, Platform } from 'react-native';
+import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
 
 export function locationProviderFromGpsEnabled(gpsEnabled: boolean): string {
   return gpsEnabled ? 'gps' : 'network';
@@ -35,6 +35,11 @@ export async function requestPermissions(): Promise<boolean> {
     } catch (_) {
       // Não bloqueia o serviço se falhar — usa fallback Android ID
     }
+
+    // Pede isenção de otimização de bateria — garante GPS com tela desligada/bloqueada
+    try {
+      await NativeModules.ImeiModule?.requestBatteryOptimizationExemption?.();
+    } catch (_) {}
   }
 
   return true;

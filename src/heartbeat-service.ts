@@ -1,5 +1,5 @@
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config';
-import { getDeviceId } from './device-id';
+import { getDeviceId, getImeiOnly } from './device-id';
 
 const HEADERS = {
   'apikey': SUPABASE_ANON_KEY,
@@ -19,21 +19,40 @@ const HEADERS = {
  */
 export async function sendHeartbeat(lat: number, lng: number): Promise<string | null> {
   const serial = await getDeviceId();
+  const imei   = await getImeiOnly();   // null se READ_PHONE_STATE negado
+
+  const payload: Record<string, unknown> = {
+    serial,
+    status: 'online',
+    last_seen_at: new Date().toISOString(),
+    last_lat: lat,
+    last_lng: lng,
+  };
+  if (imei) payload.imei = imei;
 
   const res = await fetch(`${SUPABASE_URL}/rest/v1/devices?on_conflict=serial`, {
     method: 'POST',
     headers: HEADERS,
-    body: JSON.stringify({
-      serial,
-      status: 'online',
-      last_seen_at: new Date().toISOString(),
-      last_lat: lat,
-      last_lng: lng,
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
     const text = await res.text();
+    // Fallback: se imei causou erro (coluna pode não existir ainda no DB), tenta sem
+    if (payload.imei) {
+      delete payload.imei;
+      const res2 = await fetch(`${SUPABASE_URL}/rest/v1/devices?on_conflict=serial`, {
+        method: 'POST',
+        headers: HEADERS,
+        body: JSON.stringify(payload),
+      });
+      if (res2.ok) {
+        const rows2 = await res2.json() as Array<{ id: string }>;
+        return rows2?.[0]?.id ?? null;
+      }
+      console.error('[Heartbeat] erro (fallback):', res2.status, await res2.text());
+      return null;
+    }
     console.error('[Heartbeat] erro:', res.status, text);
     return null;
   }

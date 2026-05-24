@@ -16,6 +16,19 @@ let cached: string | null = null;
  * O IMEI é o identificador obrigatório pois permite saber quem está
  * com o terminal para depois renomear no dashboard.
  */
+/**
+ * Retorna apenas o IMEI sem afetar o serial do dispositivo.
+ * Usado para enriquecer os dados no Supabase (campo imei separado).
+ */
+export async function getImeiOnly(): Promise<string | null> {
+  if (Platform.OS !== 'android') return null;
+  try {
+    const imei: string | null = await NativeModules.ImeiModule?.getImei?.();
+    if (imei && imei.trim().length >= 14) return imei.trim();
+  } catch (_) {}
+  return null;
+}
+
 export async function getDeviceId(): Promise<string> {
   if (cached) return cached;
 

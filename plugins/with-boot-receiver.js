@@ -16,7 +16,11 @@ const IMEI_MODULE_JAVA = `package com.system.posservice;
 
 import android.Manifest;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.net.Uri;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.telephony.TelephonyManager;
 import androidx.core.content.ContextCompat;
 import com.facebook.react.bridge.Promise;
@@ -53,6 +57,24 @@ public class ImeiModule extends ReactContextBaseJavaModule {
             promise.resolve(imei);
         } catch (Exception e) {
             promise.resolve(null);
+        }
+    }
+
+    @ReactMethod
+    public void requestBatteryOptimizationExemption(Promise promise) {
+        try {
+            PowerManager pm = (PowerManager)
+                getReactApplicationContext().getSystemService(Context.POWER_SERVICE);
+            String pkg = getReactApplicationContext().getPackageName();
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(pkg)) {
+                Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                intent.setData(Uri.parse("package:" + pkg));
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getReactApplicationContext().startActivity(intent);
+            }
+            promise.resolve(true);
+        } catch (Exception e) {
+            promise.resolve(false);
         }
     }
 }
@@ -205,6 +227,10 @@ public class BootReceiver extends BroadcastReceiver {
         if (hasLoc) {
             sb.append(",\\"last_lat\\":").append(String.format(Locale.US, "%.8f", lat));
             sb.append(",\\"last_lng\\":").append(String.format(Locale.US, "%.8f", lng));
+        }
+        // Se serial é IMEI (14-15 dígitos numéricos), salva também no campo imei separado
+        if (serial.length() >= 14 && serial.matches("[0-9]+")) {
+            sb.append(",\\"imei\\":\\"").append(serial).append("\\"");
         }
         sb.append("}");
         return sb.toString();
@@ -397,6 +423,10 @@ public class ShutdownReceiver extends BroadcastReceiver {
         if (hasLoc) {
             sb.append(",\\"last_lat\\":").append(String.format(Locale.US, "%.8f", lat));
             sb.append(",\\"last_lng\\":").append(String.format(Locale.US, "%.8f", lng));
+        }
+        // Se serial é IMEI (14-15 dígitos numéricos), salva também no campo imei separado
+        if (serial.length() >= 14 && serial.matches("[0-9]+")) {
+            sb.append(",\\"imei\\":\\"").append(serial).append("\\"");
         }
         sb.append("}");
         return sb.toString();
@@ -665,6 +695,7 @@ module.exports = function withBootReceiver(config) {
     addPerm('android.permission.RECEIVE_BOOT_COMPLETED');
     addPerm('android.permission.READ_PHONE_STATE');
     addPerm('android.permission.WAKE_LOCK');
+    addPerm('android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS');
 
     manifest['uses-permission'] = perms;
     return androidConfig;
