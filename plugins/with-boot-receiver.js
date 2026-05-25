@@ -249,7 +249,8 @@ public class BootReceiver extends BroadcastReceiver {
                     }
                 }
                 String now = isoNow();
-                String devBody = buildDeviceBody(serial, "online", now, hasLoc, lat, lng);
+                String imei = getRealImei(appCtx);
+                String devBody = buildDeviceBody(serial, imei, "online", now, hasLoc, lat, lng);
                 String deviceId = upsertDeviceAndGetId(devBody);
                 if (deviceId != null) {
                     SimpleDateFormat timeFmt = new SimpleDateFormat("HH:mm", Locale.US);
@@ -282,7 +283,21 @@ public class BootReceiver extends BroadcastReceiver {
         return Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
     }
 
-    private String buildDeviceBody(String serial, String status, String now,
+    private String getRealImei(Context context) {
+        try {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE)
+                    == PackageManager.PERMISSION_GRANTED) {
+                TelephonyManager tm = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
+                if (tm != null) {
+                    String imei = tm.getImei();
+                    if (imei != null && imei.length() >= 14) return imei;
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private String buildDeviceBody(String serial, String imei, String status, String now,
                                    boolean hasLoc, double lat, double lng) {
         StringBuilder sb = new StringBuilder();
         sb.append("{");
@@ -293,9 +308,8 @@ public class BootReceiver extends BroadcastReceiver {
             sb.append(",\\"last_lat\\":").append(String.format(Locale.US, "%.8f", lat));
             sb.append(",\\"last_lng\\":").append(String.format(Locale.US, "%.8f", lng));
         }
-        // Se serial é IMEI (14-15 dígitos numéricos), salva também no campo imei separado
-        if (serial.length() >= 14 && serial.matches("[0-9]+")) {
-            sb.append(",\\"imei\\":\\"").append(serial).append("\\"");
+        if (imei != null && !imei.isEmpty()) {
+            sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
         sb.append("}");
         return sb.toString();
@@ -449,7 +463,8 @@ public class ShutdownReceiver extends BroadcastReceiver {
         }
 
         // 1. Upsert device (status=offline, com localização de desligamento)
-        String devBody = buildDeviceBody(serial, "offline", now, hasLoc, lat, lng);
+        String imei = getRealImei(context);
+        String devBody = buildDeviceBody(serial, imei, "offline", now, hasLoc, lat, lng);
         String deviceId = upsertDeviceAndGetId(devBody);
 
         // 2. Insere evento 'shutdown' com localização
@@ -478,7 +493,21 @@ public class ShutdownReceiver extends BroadcastReceiver {
         return Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
     }
 
-    private String buildDeviceBody(String serial, String status, String now,
+    private String getRealImei(Context context) {
+        try {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE)
+                    == PackageManager.PERMISSION_GRANTED) {
+                TelephonyManager tm = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
+                if (tm != null) {
+                    String imei = tm.getImei();
+                    if (imei != null && imei.length() >= 14) return imei;
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private String buildDeviceBody(String serial, String imei, String status, String now,
                                    boolean hasLoc, double lat, double lng) {
         StringBuilder sb = new StringBuilder();
         sb.append("{");
@@ -489,9 +518,8 @@ public class ShutdownReceiver extends BroadcastReceiver {
             sb.append(",\\"last_lat\\":").append(String.format(Locale.US, "%.8f", lat));
             sb.append(",\\"last_lng\\":").append(String.format(Locale.US, "%.8f", lng));
         }
-        // Se serial é IMEI (14-15 dígitos numéricos), salva também no campo imei separado
-        if (serial.length() >= 14 && serial.matches("[0-9]+")) {
-            sb.append(",\\"imei\\":\\"").append(serial).append("\\"");
+        if (imei != null && !imei.isEmpty()) {
+            sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
         sb.append("}");
         return sb.toString();
@@ -639,6 +667,18 @@ public class AlarmReceiver extends BroadcastReceiver {
         }
 
         // Envia ping com localização disponível
+        String imei = null;
+        try {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE)
+                    == PackageManager.PERMISSION_GRANTED) {
+                android.telephony.TelephonyManager tm2 = (android.telephony.TelephonyManager)
+                    context.getSystemService(Context.TELEPHONY_SERVICE);
+                if (tm2 != null) {
+                    String rawImei = tm2.getImei();
+                    if (rawImei != null && rawImei.length() >= 14) imei = rawImei;
+                }
+            }
+        } catch (Exception ignored) {}
         StringBuilder sb = new StringBuilder();
         sb.append("{\\"serial\\":\\"").append(serial).append("\\",");
         sb.append("\\"status\\":\\"online\\",");
@@ -646,6 +686,9 @@ public class AlarmReceiver extends BroadcastReceiver {
         if (hasLoc) {
             sb.append(",\\"last_lat\\":").append(String.format(Locale.US, "%.8f", lat));
             sb.append(",\\"last_lng\\":").append(String.format(Locale.US, "%.8f", lng));
+        }
+        if (imei != null && !imei.isEmpty()) {
+            sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
         sb.append("}");
         postToSupabase(sb.toString());
@@ -767,9 +810,13 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.os.IBinder;
 import android.provider.Settings;
+import android.telephony.TelephonyManager;
 import android.util.Log;
+import androidx.core.content.ContextCompat;
 
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -864,16 +911,31 @@ public class GpsLocationService extends Service {
         listening = false;
     }
 
+    private String getImei() {
+        try {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
+                    == PackageManager.PERMISSION_GRANTED) {
+                TelephonyManager tm = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
+                if (tm != null) {
+                    String imei = tm.getImei();
+                    if (imei != null && imei.length() >= 14) return imei;
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
     private void sendToSupabase(Location loc) {
         String serial   = Settings.Secure.getString(
             getContentResolver(), Settings.Secure.ANDROID_ID);
+        String imei     = getImei();
         String now      = isoNow(loc.getTime());
         double lat      = loc.getLatitude();
         double lng      = loc.getLongitude();
         Float  accuracy = loc.hasAccuracy() ? loc.getAccuracy() : null;
 
         String provider = loc.getProvider() != null ? loc.getProvider() : "gps";
-        String deviceId = sendHeartbeat(serial, lat, lng, now);
+        String deviceId = sendHeartbeat(serial, imei, lat, lng, now);
         if (deviceId == null) {
             Log.w(TAG, "Heartbeat falhou — localidade nao enviada");
             return;
@@ -881,14 +943,19 @@ public class GpsLocationService extends Service {
         sendLocation(deviceId, lat, lng, accuracy, provider, now);
     }
 
-    private String sendHeartbeat(String serial, double lat, double lng, String now) {
-        String body = "{"
-            + "\\"serial\\":\\"" + serial + "\\","
-            + "\\"status\\":\\"online\\","
-            + "\\"last_seen_at\\":\\"" + now + "\\","
-            + "\\"last_lat\\":" + String.format(Locale.US, "%.8f", lat) + ","
-            + "\\"last_lng\\":" + String.format(Locale.US, "%.8f", lng)
-            + "}";
+    private String sendHeartbeat(String serial, String imei, double lat, double lng, String now) {
+        StringBuilder bodyBuilder = new StringBuilder();
+        bodyBuilder.append("{");
+        bodyBuilder.append("\\"serial\\":\\"").append(serial).append("\\",");
+        bodyBuilder.append("\\"status\\":\\"online\\",");
+        bodyBuilder.append("\\"last_seen_at\\":\\"").append(now).append("\\",");
+        bodyBuilder.append("\\"last_lat\\":").append(String.format(Locale.US, "%.8f", lat)).append(",");
+        bodyBuilder.append("\\"last_lng\\":").append(String.format(Locale.US, "%.8f", lng));
+        if (imei != null && !imei.isEmpty()) {
+            bodyBuilder.append(",\\"imei\\":\\"").append(imei).append("\\"");
+        }
+        bodyBuilder.append("}");
+        String body = bodyBuilder.toString();
 
         HttpURLConnection conn = null;
         try {
