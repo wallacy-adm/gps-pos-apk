@@ -1,6 +1,6 @@
 # CLAUDE.md — GPS POS APK
 > Lido automaticamente pelo Claude Code ao abrir este projeto.
-> Ultima atualizacao: 2026-05-24 | Versao do codigo: versionCode 12 / v1.5.0
+> Ultima atualizacao: 2026-05-25 | Versao do codigo: versionCode 17 / v2.0.0
 
 ---
 
@@ -16,118 +16,132 @@ Envia localizacao GPS a cada 30s para o Supabase. Se disfarça como "Servicos do
 - **GitHub Dashboard**: https://github.com/wallacy-adm/gps-pos-tracker
 - **Supabase**: https://pbzoggfmegmawbnmblpm.supabase.co
 - **EAS Project ID**: `fad3e092-19a1-4762-8914-99b6d206aa03`
-- **Documentacao completa**: `PROJETO.md` neste diretorio
 
 ---
 
 ## STATUS ATUAL — 2026-05-25
 
-### Build atual — v1.7.0 / versionCode 14 — EM ANDAMENTO (GitHub Actions)
-Commit: `d6b6c8d` | Push: 2026-05-25
+### Build atual — v2.0.0 / versionCode 17 — FUNCIONANDO ✅
+Commits: `a536558` (impl) `f1d7d3b` (quality) `221f6bc` (index) `95022ea` (bump)
 
-**Mudancas v1.7.0 — fix tela preta travada no boot:**
-Root cause confirmado em codigo: await sem timeout em requestPermissions() e
-startLocationUpdatesAsync(). Sistema Android suprime dialogos de permissao
-em contexto de boot/background mas Promise nunca resolve — finishActivity()
-nunca era chamado. Tela preta ficava travada indefinidamente.
+**VALIDADO NO AR-SP5 em 2026-05-25:**
+- `dumpsys location` → `com.system.posservice: gps: Interval 30 seconds... Currently active` ✅
+- `dumpsys activity services` → `GpsLocationService` rodando com `app=ProcessRecord` ✅
+- Boot: GPS subiu em 662ms (ANTES da Activity pause timeout em 1112ms) ✅
+- Device online no Supabase em <2 minutos apos boot ✅
+- Heartbeat a cada 30s com TELA DESLIGADA confirmado ✅
 
-Fixes aplicados:
-- `withTimeout()` em index.tsx: garante que Activity fecha em max ~15s
-- `getForegroundPermissionsAsync()` antes de request*: se permissao ja
-  concedida, nenhum dialogo e mostrado → sem await infinito
-- `PermissionsAndroid.check()` antes de .request() para READ_PHONE_STATE
+**ROOT CAUSE RESOLVIDO (v2.0.0):**
+expo-location tem check em LocationModule.kt: lanca excecao se
+`AppForegroundedSingleton.isForegrounded == false`. No AR-SP5, Android
+pausa a MainActivity em ~554ms (antes do React Native carregar). Isso
+mantinha o singleton como false → GPS sempre bloqueado.
 
-**Mudancas v1.6.0:**
-- BootReceiver: startActivity PRIMEIRO (antes do HTTP via goAsync)
-- GpsRestartService: ForegroundService intermediario para AlarmReceiver
-  (startActivity direto bloqueado pelo Android com tela desligada)
+Solucao: **GpsLocationService Java nativo** usa `LocationManager.requestLocationUpdates()`
+diretamente. Nao depende de expo-location nem de MainActivity estar em foreground.
+BootReceiver inicia o servico ANTES de qualquer Activity.
 
-**Mudancas v1.5.0:**
-- `index.tsx`: Tela de ativacao de bateria REMOVIDA completamente
-- `AlarmReceiver`: ping + ultima localizacao + reinicia GPS se morto
-
-**Configuracao obrigatoria no AR-SP5 (uma vez, manual):**
-Configuracoes → Apps → Servicos do Sistema → Bateria → Sem restricao
+**ISSUE PENDENTE (nao critico):**
+BootReceiver/AlarmReceiver ainda usam IMEI como serial via `getImei()` que tenta
+TelephonyManager primeiro. GpsLocationService usa ANDROID_ID. Resultado: dois registros
+no Supabase por dispositivo. GPS tracking pelo ANDROID_ID funciona 100%.
+Fix planejado: mudar BootReceiver/AlarmReceiver para usar ANDROID_ID diretamente.
 
 ### Historico de builds
 | Build | versionCode | Resultado |
 |---|---|---|
-| Build v1.7.0 | 14 | Em andamento — fix tela preta + timeout |
-| Build v1.6.0 | 13 | Parcial — BootReceiver fix, mas tela preta persistia |
-| Build v1.5.0 | 12 | Parcial — removeu tela ativacao, mas tela preta |
-| Build v1.4.1 | 11 | Ineficaz — battery button fix apenas |
-| Build v1.4.0 | 10 | Ineficaz — finishActivity era no-op |
-| Build v1.2.0 | 8 | Parcial — GPS parava com tela off |
+| Build v2.0.0 | 17 | **FUNCIONANDO** — GPS nativo Java completo |
+| Build v1.9.0 | 16 | Parcial — removeu stale check, mas LocationModule.kt ainda bloqueava |
+| Build v1.8.0 | 15 | Parcial — fix timeout, problema mais fundo |
+| Build v1.7.0 | 14 | Parcial — fix tela preta, GPS ainda bloqueado |
+| Build v1.6.0 | 13 | Parcial — BootReceiver fix |
+| Build v1.5.0 | 12 | Parcial — removeu tela ativacao |
+| Build v1.2.0 | 8 | GPS parava com tela off |
 | Build v1.1.1 | 7 | GPS basico funcionando |
 
-**APRENDIZADO CRITICO (2026-05-24):**
-BackHandler.exitApp() em React Native NAO chama System.exit(). Ele chama
-invokeDefaultOnBackPressed() → activity.finish(). O ForegroundService
-sobrevive nos dois casos. A v1.4.0 foi um no-op completo.
-O GPS parava com tela desligada por OEM power management do AR-SP5
-matando o task expo-location — nao era o exitApp o culpado.
-
-### O que funciona no POS (confirmado)
-- Heartbeat a cada 30s com localizacao GPS
-- ForegroundService com WakeLock (online com tela desligada, SE bateria configurada)
-- Fila offline: AsyncStorage, flush ao reconectar
-- BootReceiver: app sobe automaticamente ao ligar o dispositivo (abre MainActivity)
-- ShutdownReceiver: manda status=offline ao desligar (timeout 4s)
-- AlarmReceiver: ping a cada 5min + envia localizacao + reinicia GPS se morto
-- ImeiModule: le IMEI via modulo nativo Java
-
 ### EAS Free — reset em 01/06/2026
-Ate la, builds via GitHub Actions (assembleDebug, ~65MB ARM64+ARM32)
+Ate la, builds via GitHub Actions (assembleRelease, ARM64+ARM32)
 
 ---
 
-## HISTORICO DE COMMITS (resumo do mais recente ao mais antigo)
+## ARQUITETURA v2.0.0
 
-| Hash | Descricao |
-|---|---|
-| `2a51e23` | ci: ARM64+ARM32 filter para compatibilidade POS Sunmi e PDA |
-| `63c18da` | ci: add abiFilters arm64-v8a to reduce APK size |
-| `5144d0b` | fix: hora BRT na descricao boot/shutdown, timeout 4s, versionCode 6, v1.1.0 |
-| `76f7624` | feat: IMEI serial, tela-off online, localizacao boot/shutdown, versionCode 5 |
-| `a33a440` | ci: add GitHub Actions workflow for Android APK build |
-| `2ff777f` | docs: CLAUDE.md atualizado estado final versionCode4 |
-| `fdef8a6` | docs: documentacao completa PROJETO.md |
-| `ec1cbe6` | feat: ShutdownReceiver + AlarmReceiver 3h backup + versionCode 4 |
+**expo-location nao e mais o GPS principal.** GPS via Java nativo ForegroundService.
 
----
-
-## ARQUITETURA DO CODIGO
-
-**supabase-js foi REMOVIDO.** Todas as chamadas usam fetch() nativo.
-
-### Arquivos src/
+### Arquivos src/ (simplificados)
 
 | Arquivo | Papel |
 |---|---|
 | `src/config.ts` | SUPABASE_URL, ANON_KEY (hardcoded), GPS_INTERVAL_MS=30000 |
-| `src/device-id.ts` | getDeviceId() — AndroidId (Settings.Secure.ANDROID_ID) com fallback |
-| `src/heartbeat-service.ts` | sendHeartbeat(lat, lng) — upsert device online no Supabase |
-| `src/background-task.ts` | GPS_LOCATION_TASK: recebe coords, envia heartbeat + location, fila |
-| `src/location-service.ts` | requestPermissions(), locationProviderFromGpsEnabled() |
-| `src/offline-queue.ts` | OfflineQueue: AsyncStorage, max 1000 itens, flush ao reconectar |
+| `src/device-id.ts` | getDeviceId() — AndroidId (Settings.Secure.ANDROID_ID) |
+| `src/location-service.ts` | requestPermissions() — apenas solicita permissoes |
+| ~~`src/background-task.ts`~~ | REMOVIDO — GPS agora e Java |
+| ~~`src/heartbeat-service.ts`~~ | REMOVIDO — heartbeat agora e Java |
+| ~~`src/offline-queue.ts`~~ | Ainda existe mas nao e mais usado pelo GPS Java |
+
+### index.tsx (simplificado)
+Abre → requestPermissions() com timeout 5s → 500ms pause → finishActivity() → fecha.
+Nao inicia GPS (o Java ja cuidou disso no BootReceiver).
 
 ### Plugins nativos (plugins/)
 
 | Arquivo | Papel |
 |---|---|
-| `plugins/with-boot-receiver.js` | Cria 6 classes Java + registra receivers no AndroidManifest |
-| ~~`plugins/with-no-launcher-icon.js`~~ | REMOVIDO em v1.1.1 — causava getLaunchIntentForPackage null |
+| `plugins/with-boot-receiver.js` | Cria classes Java + registra no AndroidManifest |
 
-### 6 Classes Java geradas pelo plugin (criadas no build)
+### Classes Java geradas pelo plugin
 
 | Classe | Intent capturado | Acao |
 |---|---|---|
-| `ImeiModule` | (modulo nativo RN) | Le IMEI via TelephonyManager |
+| `ImeiModule` | (modulo nativo RN) | Le IMEI via TelephonyManager para dashboard |
 | `ImeiPackage` | (registro do modulo) | Registra ImeiModule no ReactApplication |
-| `BootReceiver` | BOOT_COMPLETED, QUICKBOOT_POWERON | Agenda alarme 3h + abre app + envia localizacao boot |
-| `ShutdownReceiver` | ACTION_SHUTDOWN, ACTION_REBOOT | POST sincrono status=offline com localizacao, timeout 4s |
-| `AlarmReceiver` | com.system.posservice.BACKUP_PING | POST status=online + ultima loc a cada 5min + reinicia MainActivity |
-| `AlarmScheduler` | (chamado pelo BootReceiver) | AlarmManager.setInexactRepeating a cada 5min |
+| `BootReceiver` | BOOT_COMPLETED, QUICKBOOT_POWERON | startForegroundService(GpsLocationService) PRIMEIRO, depois MainActivity |
+| `ShutdownReceiver` | ACTION_SHUTDOWN, ACTION_REBOOT | POST sincrono status=offline, timeout 4s |
+| `AlarmReceiver` | com.system.posservice.BACKUP_PING | AlarmScheduler.schedule() PRIMEIRO, depois verifica GpsLocationService vivo |
+| `AlarmScheduler` | (chamado por BootReceiver/AlarmReceiver) | setExactAndAllowWhileIdle a cada 5min (dispara no Doze) |
+| `GpsLocationService` | (ForegroundService START_STICKY) | LocationManager.requestLocationUpdates(GPS, 30s, 0m) → HttpURLConnection → Supabase |
+
+**GpsRestartService REMOVIDO** — nao mais necessario. AlarmReceiver chama startForegroundService diretamente.
+
+### GpsLocationService — comportamento
+- `onCreate()`: cria canal de notificacao, `startForeground()` (obrigatorio Android 8+)
+- `onStartCommand()`: retorna `START_STICKY` (Android reinicia se OEM matar)
+- `LocationListener.onLocationChanged()`: dispara thread → HttpURLConnection
+  - `POST /rest/v1/devices?on_conflict=serial` (heartbeat, Prefer: merge-duplicates)
+  - `POST /rest/v1/locations` (coordenada)
+- Serial: `Settings.Secure.ANDROID_ID`
+- Fallback: `NETWORK_PROVIDER` se GPS desabilitado
+- Notificacao: canal `gps_tracking`, importancia LOW (sem som/vibracao), ongoing=true
+
+---
+
+## FLUXO COMPLETO v2.0.0
+
+```
+BOOT:
+  BootReceiver → startForegroundService(GpsLocationService)  ← GPS online em <200ms
+  GpsLocationService.onCreate() → LocationManager.requestLocationUpdates(GPS, 30s, 0m)
+  BootReceiver → AlarmScheduler.schedule() → watchdog 5min
+  BootReceiver → startActivity(MainActivity) → permissoes → finishActivity() em ~1s
+
+A CADA 30s (quando ha fix GPS):
+  LocationListener.onLocationChanged() → Thread → HttpURLConnection
+  → POST /devices (heartbeat, status=online) → POST /locations (coordenada)
+
+A CADA 5min (watchdog):
+  AlarmReceiver.onReceive() → AlarmScheduler.schedule() (PRIMEIRO — garante chain)
+  → verifica se GpsLocationService vivo
+    SIM → so reagenda
+    NAO → startForegroundService(GpsLocationService) + reagenda
+
+DESLIGAMENTO:
+  ShutdownReceiver → POST status=offline (timeout 4s)
+
+TELA DESLIGADA:
+  GpsLocationService continua (ForegroundService, START_STICKY)
+  Se OEM matar → Android reinicia em segundos (START_STICKY)
+  Se nao reiniciar → AlarmReceiver reinicia em max 5min
+```
 
 ---
 
@@ -140,35 +154,15 @@ Header: Prefer: resolution=merge-duplicates,return=representation
 ```
 Sem ?on_conflict=serial na URL → 409 Conflict no segundo heartbeat.
 
-O serial do device e sempre `Settings.Secure.ANDROID_ID` (sem permissoes especiais).
-O mesmo valor e usado pelo JS (via expo-application) e pelo Java nativo.
+GpsLocationService usa `Settings.Secure.ANDROID_ID` como serial.
 
 ---
 
-## FLUXO RAPIDO: LIGA / DESLIGA / 30s
+## CREDENCIAIS (hardcoded — correto assim)
 
 ```
-LIGA:  BootReceiver → AlarmScheduler.schedule() → envia localizacao boot
-         → startActivity(Main) → requestPermissions
-         → startLocationUpdatesAsync → finishActivity() (tela preta, ~1-2s)
-         → GPS Task a cada 30s → heartbeat + location → Supabase
-
-DESLIGA: ShutdownReceiver → POST status=offline (timeout 4s) → dashboard offline
-
-BACKUP (a cada 5min):
-  AlarmReceiver → POST status=online + ultima localizacao conhecida
-                → startActivity(Main) → GPS ainda rodando? retorna imediato
-                                      → GPS morto? relanca + fecha em 1s
-```
-
----
-
-## CREDENCIAIS (hardcoded em src/config.ts — correto assim)
-
-```typescript
-export const SUPABASE_URL      = 'https://pbzoggfmegmawbnmblpm.supabase.co';
-export const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBiem9nZ2ZtZWdtYXdibm1ibHBtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzMDYzOTksImV4cCI6MjA5NDg4MjM5OX0.OpRY-AH7vHsQYHzi39QpqiYL_uNxWOZFE_pYvOSo3Ic';
-export const GPS_INTERVAL_MS   = 30_000;
+SUPABASE_URL = 'https://pbzoggfmegmawbnmblpm.supabase.co'
+ANON_KEY     = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'
 ```
 Anon key e publica por design do Supabase. Seguro hardcodar.
 NAO usar .env — EAS Build nao le .env local. URL ficaria undefined no bundle.
@@ -179,21 +173,12 @@ NAO usar .env — EAS Build nao le .env local. URL ficaria undefined no bundle.
 
 Arquivo: `.github/workflows/build-apk.yml`
 
-O workflow roda em push no main e gera APK debug instalavel sem keystore:
 1. `npm ci` — instala dependencias
 2. `npx expo prebuild --platform android --clean` — gera pasta android/
-3. Script Python: injeta `abiFilters "arm64-v8a", "armeabi-v7a"` no build.gradle
-4. `./gradlew assembleDebug` — compila o APK
-5. Artifact disponivel em Actions → gps-pos-apk-{numero} → app-debug.apk
-
-**Por que abiFilters?** Sem esse filtro, o Gradle compila para 4 arquiteturas
-(ARM64, ARM32, x86, x86_64), gerando APK de 108MB que o POS nao aceita.
-Com o filtro, APK fica em ~65MB e roda em qualquer terminal POS real.
-
-**Limitacao do GitHub Actions vs EAS:**
-O workflow usa `expo prebuild` (que CLAUDE.md diz para nao usar localmente).
-E uma solucao temporaria ate o EAS resetar em 01/06/2026.
-O EAS gera APK com assinatura consistente e sem variacao de tamanho.
+3. Configura keystore de assinatura (secrets do repo)
+4. Script Python: injeta abiFilters arm64-v8a + armeabi-v7a no build.gradle
+5. `./gradlew assembleRelease` — compila APK assinado
+6. Artifact: gps-pos-apk-{numero}/app-release.apk (~65MB)
 
 ---
 
@@ -201,43 +186,25 @@ O EAS gera APK com assinatura consistente e sem variacao de tamanho.
 
 | Dispositivo | CPU | Android | Status |
 |---|---|---|---|
-| Smartpos Arny AR-SP5 | ARM64 | 9 | Testado e funcionando |
+| Smartpos Arny AR-SP5 | ARM64 | 9 | Testado e funcionando v2.0.0 |
 | Sunmi V2 | ARM64 | 7.1+ | Compativel |
 | PDA POS WiFi/BT generico | ARM64 ou ARM32 | 7+ | Compativel |
-| Emulador x86 | x86 | qualquer | NAO compativel (filtrado) |
 
-**minSdkVersion**: 24 (Android 7.0) — definido pelo Expo SDK 54.
+**minSdkVersion**: 24 (Android 7.0)
 
-**Configuracao necessaria no Sunmi V2:**
-Configuracoes → Gerenciar aplicativos → Servicos do Sistema → Permissoes
-→ ativar "Iniciar em segundo plano" + desativar "Otimizacao de bateria"
-
----
-
-## PROXIMO BUILD — 01/06/2026
-
-```bash
-cd C:\eas\gps-pos-apk
-eas build --platform android --profile preview --non-interactive
-```
-
-Apos buildar:
-1. Baixar o APK do link gerado pelo EAS
-2. Instalar no POS sobre a versao anterior (versionCode 6 > versoes anteriores)
-3. Aceitar permissao de localizacao (sempre permitir) + desativar otimizacao de bateria
-4. App fecha sozinho — nao precisa mais mexer
+**Configuracao necessaria no AR-SP5 (uma vez, manual):**
+Configuracoes → Apps → Servicos do Sistema → Bateria → Sem restricao
 
 ---
 
 ## REGRAS DESTE PROJETO
 
-- Build sempre de `C:\eas\gps-pos-apk\` (sem acento — path 8.3 do EAS quebra com acentos)
+- Build sempre de `C:\eas\gps-pos-apk\` (sem acento)
 - Nunca usar `expo prebuild` local — EAS Build cloud e o fluxo correto
-- Antes de qualquer build: git add + git commit (EAS nao ve arquivos nao commitados)
 - newArchEnabled: false (expo-location background nao funciona com Nova Arquitetura)
 - Git no cmd, nao powershell (git nao esta no PATH do PowerShell neste ambiente)
-- Commits com acentos: usar arquivo temp com `echo msg > commit_msg.txt && git commit -F commit_msg.txt`
-- Verificar APK baixado: tamanho deve ser ~55-70MB. Se for 108MB, o abiFilter nao funcionou.
+- Commits com acentos: usar arquivo temp `echo msg > commit_msg.txt && git commit -F commit_msg.txt`
+- versionCode deve incrementar a cada novo APK instalado
 
 ---
 
@@ -250,12 +217,9 @@ Deploy:   Vercel (auto-deploy em push na main)
 Stack:    Vite + React + TanStack Router + Tailwind + Supabase
 ```
 
-### Login (adicionado em 23/05/2026)
+### Login
 - Usuario: `wallacy` | PIN: `170804`
 - Sessao: localStorage com expiracao de 7 dias
-- Arquivos: `src/utils/auth.ts`, `src/routes/login.tsx`, `src/routes/__root.tsx`
-- AuthGuard em `__root.tsx` redireciona para /login se nao autenticado
-- Botao de logout em `src/routes/settings.tsx`
 
 ### Paginas principais
 - `/login` — tela de login (publica)
