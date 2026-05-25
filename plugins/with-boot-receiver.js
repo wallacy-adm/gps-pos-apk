@@ -618,6 +618,9 @@ public class AlarmReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         if (!ACTION_BACKUP_PING.equals(intent.getAction())) return;
 
+        // Reagenda PRIMEIRO — garante continuidade do alarm chain mesmo se HTTP falhar ou travar
+        AlarmScheduler.schedule(context);
+
         String serial = getImei(context);
         String now    = isoNow();
 
@@ -659,9 +662,6 @@ public class AlarmReceiver extends BroadcastReceiver {
                 context.startService(gps);
             }
         } catch (Exception ignored) {}
-
-        // Reagenda proximo tick (setExactAndAllowWhileIdle nao e automatico)
-        AlarmScheduler.schedule(context);
     }
 
     private String getImei(Context context) {
@@ -706,64 +706,6 @@ public class AlarmReceiver extends BroadcastReceiver {
         sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
         return sdf.format(new Date());
     }
-}
-`;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// GpsRestartService — ForegroundService intermediário usado pelo AlarmReceiver
-// startActivity direto do AlarmReceiver é bloqueado pelo Android com tela off.
-// ForegroundService TEM permissão para iniciar Activity mesmo com tela desligada.
-// ─────────────────────────────────────────────────────────────────────────────
-const GPS_RESTART_SERVICE_JAVA = `package com.system.posservice;
-
-import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.Service;
-import android.content.Intent;
-import android.os.Build;
-import android.os.Handler;
-import android.os.IBinder;
-import android.os.Looper;
-
-public class GpsRestartService extends Service {
-
-    private static final int  NOTIF_ID   = 98;
-    private static final String CHANNEL_ID = "gps_restart";
-
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        // Cria canal e inicia foreground (obrigatório no Android 8+)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel ch = new NotificationChannel(
-                CHANNEL_ID, "Sistema", NotificationManager.IMPORTANCE_MIN);
-            ch.setShowBadge(false);
-            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-            if (nm != null) nm.createNotificationChannel(ch);
-        }
-        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-            ? new Notification.Builder(this, CHANNEL_ID)
-            : new Notification.Builder(this);
-        startForeground(NOTIF_ID, builder
-            .setContentTitle("Servicos do Sistema")
-            .setSmallIcon(android.R.drawable.ic_popup_sync)
-            .build());
-
-        // ForegroundService pode iniciar Activity com tela desligada
-        try {
-            Intent launch = new Intent();
-            launch.setClassName(getPackageName(), getPackageName() + ".MainActivity");
-            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-            startActivity(launch);
-        } catch (Exception ignored) {}
-
-        // Para o servico apos 3s (tempo para MainActivity iniciar)
-        new Handler(Looper.getMainLooper()).postDelayed(this::stopSelf, 3000);
-        return START_NOT_STICKY;
-    }
-
-    @Override
-    public IBinder onBind(Intent intent) { return null; }
 }
 `;
 
@@ -850,7 +792,7 @@ public class GpsLocationService extends Service {
 
     private LocationManager  locationManager;
     private LocationListener locationListener;
-    private boolean          listening = false;
+    private volatile boolean listening = false;
 
     @Override
     public void onCreate() {
@@ -930,12 +872,13 @@ public class GpsLocationService extends Service {
         double lng      = loc.getLongitude();
         Float  accuracy = loc.hasAccuracy() ? loc.getAccuracy() : null;
 
+        String provider = loc.getProvider() != null ? loc.getProvider() : "gps";
         String deviceId = sendHeartbeat(serial, lat, lng, now);
         if (deviceId == null) {
             Log.w(TAG, "Heartbeat falhou — localidade nao enviada");
             return;
         }
-        sendLocation(deviceId, lat, lng, accuracy, now);
+        sendLocation(deviceId, lat, lng, accuracy, provider, now);
     }
 
     private String sendHeartbeat(String serial, double lat, double lng, String now) {
@@ -988,7 +931,7 @@ public class GpsLocationService extends Service {
         return null;
     }
 
-    private void sendLocation(String deviceId, double lat, double lng, Float accuracy, String now) {
+    private void sendLocation(String deviceId, double lat, double lng, Float accuracy, String provider, String now) {
         StringBuilder body = new StringBuilder();
         body.append("{");
         body.append("\\"device_id\\":\\"").append(deviceId).append("\\",");
@@ -997,7 +940,7 @@ public class GpsLocationService extends Service {
         if (accuracy != null) {
             body.append("\\"accuracy\\":").append(String.format(Locale.US, "%.2f", accuracy)).append(",");
         }
-        body.append("\\"provider\\":\\"gps\\",");
+        body.append("\\"provider\\":\\"").append(provider).append("\\",");
         body.append("\\"recorded_at\\":\\"").append(now).append("\\"");
         body.append("}");
 
