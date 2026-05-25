@@ -235,7 +235,7 @@ public class BootReceiver extends BroadcastReceiver {
         final Context appCtx = context.getApplicationContext();
         new Thread(() -> {
             try {
-                String serial = getImei(appCtx);
+                String serial = Settings.Secure.getString(appCtx.getContentResolver(), Settings.Secure.ANDROID_ID);
                 double lat = 0, lng = 0;
                 boolean hasLoc = false;
                 if (ContextCompat.checkSelfPermission(appCtx, Manifest.permission.ACCESS_FINE_LOCATION)
@@ -431,7 +431,7 @@ public class ShutdownReceiver extends BroadcastReceiver {
             return;
         }
 
-        String serial = getImei(context);
+        String serial = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
         String now    = isoNow();
 
         // Captura última localização conhecida (não requer novo fix GPS)
@@ -621,7 +621,7 @@ public class AlarmReceiver extends BroadcastReceiver {
         // Reagenda PRIMEIRO — garante continuidade do alarm chain mesmo se HTTP falhar ou travar
         AlarmScheduler.schedule(context);
 
-        String serial = getImei(context);
+        String serial = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
         String now    = isoNow();
 
         // Tenta capturar última localização conhecida para atualizar last_lat/last_lng
