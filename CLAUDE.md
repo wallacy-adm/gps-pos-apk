@@ -1,6 +1,6 @@
 # CLAUDE.md — GPS POS APK
 > Lido automaticamente pelo Claude Code ao abrir este projeto.
-> Ultima atualizacao: 2026-05-25 | Versao do codigo: versionCode 17 / v2.0.0
+> Ultima atualizacao: 2026-05-25 | Versao do codigo: versionCode 19 / v2.0.2
 
 ---
 
@@ -21,8 +21,11 @@ Envia localizacao GPS a cada 30s para o Supabase. Se disfarça como "Servicos do
 
 ## STATUS ATUAL — 2026-05-25
 
-### Build atual — v2.0.0 / versionCode 17 — FUNCIONANDO ✅
-Commits: `a536558` (impl) `f1d7d3b` (quality) `221f6bc` (index) `95022ea` (bump)
+### Build atual — v2.0.2 / versionCode 19 — BUILD EM ANDAMENTO ⏳
+Commits: `b67bf35` (IMEI em GpsLocationService + buildDeviceBody + AlarmReceiver)
+
+### Build v2.0.1 / versionCode 18 — FUNCIONANDO ✅ (instalado no AR-SP5)
+Commits: `200e1cc` (unify serial ANDROID_ID)
 
 **VALIDADO NO AR-SP5 em 2026-05-25:**
 - `dumpsys location` → `com.system.posservice: gps: Interval 30 seconds... Currently active` ✅
@@ -41,15 +44,20 @@ Solucao: **GpsLocationService Java nativo** usa `LocationManager.requestLocation
 diretamente. Nao depende de expo-location nem de MainActivity estar em foreground.
 BootReceiver inicia o servico ANTES de qualquer Activity.
 
-**ISSUE PENDENTE (nao critico):**
-BootReceiver/AlarmReceiver ainda usam IMEI como serial via `getImei()` que tenta
-TelephonyManager primeiro. GpsLocationService usa ANDROID_ID. Resultado: dois registros
-no Supabase por dispositivo. GPS tracking pelo ANDROID_ID funciona 100%.
-Fix planejado: mudar BootReceiver/AlarmReceiver para usar ANDROID_ID diretamente.
+**v2.0.1 — RESOLVIDO:**
+Todos os receivers (BootReceiver, ShutdownReceiver, AlarmReceiver) agora usam
+ANDROID_ID como serial. Um unico registro no Supabase por dispositivo.
+
+**v2.0.2 — IMEI no dashboard (build em andamento):**
+GpsLocationService.sendHeartbeat() agora inclui campo `imei` via TelephonyManager.
+buildDeviceBody() em BootReceiver/ShutdownReceiver + AlarmReceiver tambem envia IMEI.
+Apos instalacao: dashboard mostra IMEI do dispositivo ao lado do ANDROID_ID.
 
 ### Historico de builds
 | Build | versionCode | Resultado |
 |---|---|---|
+| Build v2.0.2 | 19 | Em andamento — IMEI em todos os receivers |
+| Build v2.0.1 | 18 | **FUNCIONANDO** — serial unificado ANDROID_ID |
 | Build v2.0.0 | 17 | **FUNCIONANDO** — GPS nativo Java completo |
 | Build v1.9.0 | 16 | Parcial — removeu stale check, mas LocationModule.kt ainda bloqueava |
 | Build v1.8.0 | 15 | Parcial — fix timeout, problema mais fundo |
