@@ -2,12 +2,12 @@
   "expo": {
     "name": "Serviços do Sistema",
     "slug": "pos-service",
-    "version": "1.9.0",
+    "version": "2.0.0",
     "orientation": "portrait",
     "newArchEnabled": false,
     "android": {
       "package": "com.system.posservice",
-      "versionCode": 16,
+      "versionCode": 17,
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
