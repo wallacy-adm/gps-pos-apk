@@ -78,9 +78,11 @@ TaskManager.defineTask(GPS_TASK, async ({ data, error: taskErr }: any) => {
 });
 
 export async function startLocationTracking(): Promise<void> {
-  const running = await Location.hasStartedLocationUpdatesAsync(GPS_TASK).catch(() => false);
-  if (running) return;
-
+  // NÃO checa hasStartedLocationUpdatesAsync() — retorna true mesmo quando
+  // o ForegroundService está morto (registro da task persiste no TaskManager).
+  // Resultado: startLocationUpdatesAsync() nunca era chamado → GPS nunca subia.
+  // startLocationUpdatesAsync() é idempotente: se já rodando, apenas atualiza
+  // as opções. Se parado (stale), reinicia o ForegroundService corretamente.
   await Location.startLocationUpdatesAsync(GPS_TASK, {
     accuracy: Location.Accuracy.High,
     timeInterval: 30_000,

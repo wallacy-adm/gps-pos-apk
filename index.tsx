@@ -55,9 +55,11 @@ function App() {
       // Promise resolver. Não precisamos esperar o Promise para fechar a Activity.
       startLocationTracking().catch(() => {});
 
-      // 3. Pausa 1s — garante que startForegroundService() foi chamado no native
-      // antes da Activity fechar. Sem isso, sem ForegroundService = processo morre.
-      await new Promise<void>(resolve => setTimeout(resolve, 1_000));
+      // 3. Pausa 2s — garante que startLocationUpdatesAsync() completou e o
+      // ForegroundService está vivo antes da Activity fechar.
+      // 2s é suficiente: quando o app está em foreground (janela visível),
+      // startLocationUpdatesAsync() completa em < 500ms.
+      await new Promise<void>(resolve => setTimeout(resolve, 2_000));
 
       // 4. Fecha a Activity — ForegroundService GPS continua rodando
       try {
