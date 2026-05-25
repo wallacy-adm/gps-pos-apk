@@ -203,49 +203,9 @@ public class BootReceiver extends BroadcastReceiver {
             return;
         }
 
-        // 1. Lê IMEI (Android 9 com READ_PHONE_STATE) ou fallback para AndroidId
-        String serial = getImei(context);
-
-        // 2. Captura última localização conhecida
-        double lat = 0, lng = 0;
-        boolean hasLoc = false;
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED) {
-            LocationManager lm = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
-            if (lm != null) {
-                Location loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-                if (loc == null) loc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
-                if (loc == null) loc = lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER);
-                if (loc != null) {
-                    lat = loc.getLatitude();
-                    lng = loc.getLongitude();
-                    hasLoc = true;
-                }
-            }
-        }
-
-        String now = isoNow();
-
-        // 3. Upsert device → recebe UUID → insere evento 'boot'
-        String devBody = buildDeviceBody(serial, "online", now, hasLoc, lat, lng);
-        String deviceId = upsertDeviceAndGetId(devBody);
-        if (deviceId != null) {
-            SimpleDateFormat timeFmt = new SimpleDateFormat("HH:mm", Locale.US);
-            timeFmt.setTimeZone(TimeZone.getTimeZone("America/Sao_Paulo"));
-            String timeStr = timeFmt.format(new Date());
-            String desc = hasLoc
-                ? "Liga " + timeStr + " | " + String.format(Locale.US, "%.6f, %.6f", lat, lng)
-                : "Liga " + timeStr + " | localização não disponível";
-            String evBody = buildEventBody(deviceId, "boot", desc, hasLoc, lat, lng, now);
-            postEvent(evBody);
-        }
-
-        // 4. Agenda alarme de backup a cada 3h
-        AlarmScheduler.schedule(context);
-
-        // 5. Abre o app para iniciar o serviço GPS foreground
-        // getLaunchIntentForPackage retorna null se CATEGORY_LAUNCHER foi removido;
-        // usar setClassName garante que o launch funciona independente do manifest.
+        // 1. ABRE O APP IMEDIATAMENTE — antes de qualquer HTTP
+        // Motivo: HTTP tem timeout de 8s cada; BroadcastReceiver tem 10s de vida total.
+        // Na versão anterior, HTTP vinha primeiro → receiver morria antes do startActivity.
         try {
             Intent launch = new Intent();
             launch.setClassName(context.getPackageName(),
@@ -254,6 +214,45 @@ public class BootReceiver extends BroadcastReceiver {
                           | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             context.startActivity(launch);
         } catch (Exception ignored) {}
+
+        // 2. Agenda alarme de backup
+        AlarmScheduler.schedule(context);
+
+        // 3. HTTP em thread separada (goAsync mantém o receiver vivo até finish())
+        final PendingResult pendingResult = goAsync();
+        final Context appCtx = context.getApplicationContext();
+        new Thread(() -> {
+            try {
+                String serial = getImei(appCtx);
+                double lat = 0, lng = 0;
+                boolean hasLoc = false;
+                if (ContextCompat.checkSelfPermission(appCtx, Manifest.permission.ACCESS_FINE_LOCATION)
+                        == PackageManager.PERMISSION_GRANTED) {
+                    LocationManager lm = (LocationManager) appCtx.getSystemService(Context.LOCATION_SERVICE);
+                    if (lm != null) {
+                        Location loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+                        if (loc == null) loc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                        if (loc == null) loc = lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER);
+                        if (loc != null) { lat = loc.getLatitude(); lng = loc.getLongitude(); hasLoc = true; }
+                    }
+                }
+                String now = isoNow();
+                String devBody = buildDeviceBody(serial, "online", now, hasLoc, lat, lng);
+                String deviceId = upsertDeviceAndGetId(devBody);
+                if (deviceId != null) {
+                    SimpleDateFormat timeFmt = new SimpleDateFormat("HH:mm", Locale.US);
+                    timeFmt.setTimeZone(TimeZone.getTimeZone("America/Sao_Paulo"));
+                    String timeStr = timeFmt.format(new Date());
+                    String desc = hasLoc
+                        ? "Liga " + timeStr + " | " + String.format(Locale.US, "%.6f, %.6f", lat, lng)
+                        : "Liga " + timeStr + " | localizacao nao disponivel";
+                    String evBody = buildEventBody(deviceId, "boot", desc, hasLoc, lat, lng, now);
+                    postEvent(evBody);
+                }
+            } finally {
+                pendingResult.finish();
+            }
+        }).start();
     }
 
     private String getImei(Context context) {
@@ -583,6 +582,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.location.Location;
 import android.location.LocationManager;
+import android.os.Build;
 import android.provider.Settings;
 import android.telephony.TelephonyManager;
 import androidx.core.content.ContextCompat;
@@ -635,15 +635,16 @@ public class AlarmReceiver extends BroadcastReceiver {
         sb.append("}");
         postToSupabase(sb.toString());
 
-        // Reabre a MainActivity para garantir que o ForegroundService GPS está rodando.
-        // Se o task GPS já estiver ativo, startLocationTracking() retorna imediatamente.
-        // Se o OEM tiver matado o task, ele é relançado e a Activity fecha em ~1s.
+        // Usa GpsRestartService para reiniciar o GPS (funciona com tela desligada).
+        // startActivity direto é bloqueado pelo Android quando a tela está off.
+        // ForegroundService tem permissão para abrir Activity em background.
         try {
-            Intent launch = new Intent();
-            launch.setClassName(context.getPackageName(),
-                    context.getPackageName() + ".MainActivity");
-            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-            context.startActivity(launch);
+            Intent restart = new Intent(context, GpsRestartService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(restart);
+            } else {
+                context.startService(restart);
+            }
         } catch (Exception ignored) {}
     }
 
@@ -689,6 +690,64 @@ public class AlarmReceiver extends BroadcastReceiver {
         sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
         return sdf.format(new Date());
     }
+}
+`;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GpsRestartService — ForegroundService intermediário usado pelo AlarmReceiver
+// startActivity direto do AlarmReceiver é bloqueado pelo Android com tela off.
+// ForegroundService TEM permissão para iniciar Activity mesmo com tela desligada.
+// ─────────────────────────────────────────────────────────────────────────────
+const GPS_RESTART_SERVICE_JAVA = `package com.system.posservice;
+
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.Service;
+import android.content.Intent;
+import android.os.Build;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
+
+public class GpsRestartService extends Service {
+
+    private static final int  NOTIF_ID   = 98;
+    private static final String CHANNEL_ID = "gps_restart";
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        // Cria canal e inicia foreground (obrigatório no Android 8+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel ch = new NotificationChannel(
+                CHANNEL_ID, "Sistema", NotificationManager.IMPORTANCE_MIN);
+            ch.setShowBadge(false);
+            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            if (nm != null) nm.createNotificationChannel(ch);
+        }
+        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            ? new Notification.Builder(this, CHANNEL_ID)
+            : new Notification.Builder(this);
+        startForeground(NOTIF_ID, builder
+            .setContentTitle("Servicos do Sistema")
+            .setSmallIcon(android.R.drawable.ic_popup_sync)
+            .build());
+
+        // ForegroundService pode iniciar Activity com tela desligada
+        try {
+            Intent launch = new Intent();
+            launch.setClassName(getPackageName(), getPackageName() + ".MainActivity");
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            startActivity(launch);
+        } catch (Exception ignored) {}
+
+        // Para o servico apos 3s (tempo para MainActivity iniciar)
+        new Handler(Looper.getMainLooper()).postDelayed(this::stopSelf, 3000);
+        return START_NOT_STICKY;
+    }
+
+    @Override
+    public IBinder onBind(Intent intent) { return null; }
 }
 `;
 
@@ -740,6 +799,16 @@ module.exports = function withBootReceiver(config) {
     const app      = manifest.application?.[0];
     if (!app) return androidConfig;
     if (!app.receiver) app.receiver = [];
+    if (!app.service)  app.service  = [];
+
+    const hasService = (name) =>
+      app.service.some((s) => s.$?.['android:name'] === name);
+
+    if (!hasService('.GpsRestartService')) {
+      app.service.push({
+        $: { 'android:name': '.GpsRestartService', 'android:exported': 'false' },
+      });
+    }
 
     const hasReceiver = (name) =>
       app.receiver.some((r) => r.$?.['android:name'] === name);
@@ -826,12 +895,13 @@ module.exports = function withBootReceiver(config) {
       await fs.promises.mkdir(packageDir, { recursive: true });
 
       const files = {
-        'ImeiModule.java'      : IMEI_MODULE_JAVA,
-        'ImeiPackage.java'     : IMEI_PACKAGE_JAVA,
-        'BootReceiver.java'    : BOOT_RECEIVER_JAVA,
-        'ShutdownReceiver.java': SHUTDOWN_RECEIVER_JAVA,
-        'AlarmReceiver.java'   : ALARM_RECEIVER_JAVA,
-        'AlarmScheduler.java'  : ALARM_SCHEDULER_JAVA,
+        'ImeiModule.java'       : IMEI_MODULE_JAVA,
+        'ImeiPackage.java'      : IMEI_PACKAGE_JAVA,
+        'BootReceiver.java'     : BOOT_RECEIVER_JAVA,
+        'ShutdownReceiver.java' : SHUTDOWN_RECEIVER_JAVA,
+        'AlarmReceiver.java'    : ALARM_RECEIVER_JAVA,
+        'AlarmScheduler.java'   : ALARM_SCHEDULER_JAVA,
+        'GpsRestartService.java': GPS_RESTART_SERVICE_JAVA,
       };
 
       for (const [fileName, content] of Object.entries(files)) {
