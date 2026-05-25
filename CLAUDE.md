@@ -20,20 +20,31 @@ Envia localizacao GPS a cada 30s para o Supabase. Se disfarça como "Servicos do
 
 ---
 
-## STATUS ATUAL — 2026-05-24
+## STATUS ATUAL — 2026-05-25
 
-### Build atual — v1.5.0 / versionCode 12 — EM ANDAMENTO (GitHub Actions)
-Commit: `3341485` | Push: 2026-05-24 (noite)
+### Build atual — v1.7.0 / versionCode 14 — EM ANDAMENTO (GitHub Actions)
+Commit: `d6b6c8d` | Push: 2026-05-25
+
+**Mudancas v1.7.0 — fix tela preta travada no boot:**
+Root cause confirmado em codigo: await sem timeout em requestPermissions() e
+startLocationUpdatesAsync(). Sistema Android suprime dialogos de permissao
+em contexto de boot/background mas Promise nunca resolve — finishActivity()
+nunca era chamado. Tela preta ficava travada indefinidamente.
+
+Fixes aplicados:
+- `withTimeout()` em index.tsx: garante que Activity fecha em max ~15s
+- `getForegroundPermissionsAsync()` antes de request*: se permissao ja
+  concedida, nenhum dialogo e mostrado → sem await infinito
+- `PermissionsAndroid.check()` antes de .request() para READ_PHONE_STATE
+
+**Mudancas v1.6.0:**
+- BootReceiver: startActivity PRIMEIRO (antes do HTTP via goAsync)
+- GpsRestartService: ForegroundService intermediario para AlarmReceiver
+  (startActivity direto bloqueado pelo Android com tela desligada)
 
 **Mudancas v1.5.0:**
 - `index.tsx`: Tela de ativacao de bateria REMOVIDA completamente
-  - Novo fluxo: permissions → startLocationTracking → closeActivity
-  - App fecha em ~1-2s, ForegroundService continua rodando
-  - Sem mais loop de ativacao em todo boot/reinicializacao
-- `AlarmReceiver`: agora faz 2 coisas alem do ping HTTP:
-  1. Envia ultima localizacao conhecida (last_lat/last_lng atualizados a cada 5min)
-  2. Abre MainActivity para reiniciar GPS se OEM tiver matado o task
-- Auto-recuperacao: GPS morto → AlarmReceiver reinicia em ≤5 minutos
+- `AlarmReceiver`: ping + ultima localizacao + reinicia GPS se morto
 
 **Configuracao obrigatoria no AR-SP5 (uma vez, manual):**
 Configuracoes → Apps → Servicos do Sistema → Bateria → Sem restricao
@@ -41,11 +52,13 @@ Configuracoes → Apps → Servicos do Sistema → Bateria → Sem restricao
 ### Historico de builds
 | Build | versionCode | Resultado |
 |---|---|---|
-| Build #12 (v1.5.0) | 12 | Em andamento |
-| Build #11 (v1.4.1) | 11 | Ineficaz — battery button fix apenas |
-| Build #10 (v1.4.0) | 10 | Ineficaz — finishActivity era no-op |
-| Build #9 (v1.2.0) | 8 | Funcionou parcialmente — GPS parava com tela off |
-| Build #7 (v1.1.1) | 7 | GPS basico funcionando |
+| Build v1.7.0 | 14 | Em andamento — fix tela preta + timeout |
+| Build v1.6.0 | 13 | Parcial — BootReceiver fix, mas tela preta persistia |
+| Build v1.5.0 | 12 | Parcial — removeu tela ativacao, mas tela preta |
+| Build v1.4.1 | 11 | Ineficaz — battery button fix apenas |
+| Build v1.4.0 | 10 | Ineficaz — finishActivity era no-op |
+| Build v1.2.0 | 8 | Parcial — GPS parava com tela off |
+| Build v1.1.1 | 7 | GPS basico funcionando |
 
 **APRENDIZADO CRITICO (2026-05-24):**
 BackHandler.exitApp() em React Native NAO chama System.exit(). Ele chama
