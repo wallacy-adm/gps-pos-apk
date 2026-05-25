@@ -1,6 +1,6 @@
 # CLAUDE.md — GPS POS APK
 > Lido automaticamente pelo Claude Code ao abrir este projeto.
-> Ultima atualizacao: 2026-05-24 | Versao do codigo: versionCode 7 / v1.1.1
+> Ultima atualizacao: 2026-05-24 | Versao do codigo: versionCode 12 / v1.5.0
 
 ---
 
@@ -22,42 +22,49 @@ Envia localizacao GPS a cada 30s para o Supabase. Se disfarça como "Servicos do
 
 ## STATUS ATUAL — 2026-05-24
 
-### Build #5 (v1.1, ARM64+ARM32) — FALHOU no POS
-- Instalava normalmente mas so mostrava "Concluir" (sem botao "Abrir")
-- App nunca abria → permissoes nunca pedidas → GPS nunca iniciava
-- CAUSA RAIZ: with-no-launcher-icon.js remove CATEGORY_LAUNCHER do AndroidManifest
-  - getLaunchIntentForPackage() retorna null (sem LAUNCHER category)
-  - Android installer nao mostra "Abrir" (usa getLaunchIntentForPackage internamente)
-  - BootReceiver nao conseguia lancar MainActivity (mesmo bug)
+### Build atual — v1.5.0 / versionCode 12 — EM ANDAMENTO (GitHub Actions)
+Commit: `3341485` | Push: 2026-05-24 (noite)
 
-### Build #6 (v1.1.1, versionCode 7) — EM BUILD no GitHub Actions
-Commits do fix (2026-05-24):
-- Removido with-no-launcher-icon.js dos plugins (restaura botao "Abrir" e LAUNCHER)
-- BootReceiver corrigido: usa setClassName direto em vez de getLaunchIntentForPackage
-- app.json: versionCode 6 -> 7, version "1.1.0" -> "1.1.1"
+**Mudancas v1.5.0:**
+- `index.tsx`: Tela de ativacao de bateria REMOVIDA completamente
+  - Novo fluxo: permissions → startLocationTracking → closeActivity
+  - App fecha em ~1-2s, ForegroundService continua rodando
+  - Sem mais loop de ativacao em todo boot/reinicializacao
+- `AlarmReceiver`: agora faz 2 coisas alem do ping HTTP:
+  1. Envia ultima localizacao conhecida (last_lat/last_lng atualizados a cada 5min)
+  2. Abre MainActivity para reiniciar GPS se OEM tiver matado o task
+- Auto-recuperacao: GPS morto → AlarmReceiver reinicia em ≤5 minutos
 
-### Proximo EAS Build — 01/06/2026
-EAS Free esgotou builds mensais. Builds manuais via GitHub Actions ate la.
-```bash
-eas build --platform android --profile preview --non-interactive
-```
+**Configuracao obrigatoria no AR-SP5 (uma vez, manual):**
+Configuracoes → Apps → Servicos do Sistema → Bateria → Sem restricao
+
+### Historico de builds
+| Build | versionCode | Resultado |
+|---|---|---|
+| Build #12 (v1.5.0) | 12 | Em andamento |
+| Build #11 (v1.4.1) | 11 | Ineficaz — battery button fix apenas |
+| Build #10 (v1.4.0) | 10 | Ineficaz — finishActivity era no-op |
+| Build #9 (v1.2.0) | 8 | Funcionou parcialmente — GPS parava com tela off |
+| Build #7 (v1.1.1) | 7 | GPS basico funcionando |
+
+**APRENDIZADO CRITICO (2026-05-24):**
+BackHandler.exitApp() em React Native NAO chama System.exit(). Ele chama
+invokeDefaultOnBackPressed() → activity.finish(). O ForegroundService
+sobrevive nos dois casos. A v1.4.0 foi um no-op completo.
+O GPS parava com tela desligada por OEM power management do AR-SP5
+matando o task expo-location — nao era o exitApp o culpado.
 
 ### O que funciona no POS (confirmado)
 - Heartbeat a cada 30s com localizacao GPS
-- ForegroundService com WakeLock (online com tela desligada)
+- ForegroundService com WakeLock (online com tela desligada, SE bateria configurada)
 - Fila offline: AsyncStorage, flush ao reconectar
-- BootReceiver: app sobe automaticamente ao ligar o dispositivo
+- BootReceiver: app sobe automaticamente ao ligar o dispositivo (abre MainActivity)
 - ShutdownReceiver: manda status=offline ao desligar (timeout 4s)
-- AlarmReceiver: ping de backup a cada 3h (contorna Doze Mode)
+- AlarmReceiver: ping a cada 5min + envia localizacao + reinicia GPS se morto
 - ImeiModule: le IMEI via modulo nativo Java
 
-### Versoes importantes
-| Data | APK | Tamanho | Resultado |
-|---|---|---|---|
-| 22/05 | gps-pos-tracker-DIAGNOSTICO.apk | 56MB | Funcionou no POS |
-| 22/05 | gps-pos-tracker-FINAL.apk | 56MB | Referencia |
-| 23/05 | gps-pos-tracker-v1.1.apk | 108MB | NAO funcionou (muito grande) |
-| 23/05 | Build #5 (em andamento) | ~65MB | Esperado funcionar |
+### EAS Free — reset em 01/06/2026
+Ate la, builds via GitHub Actions (assembleDebug, ~65MB ARM64+ARM32)
 
 ---
 
@@ -96,7 +103,7 @@ eas build --platform android --profile preview --non-interactive
 | Arquivo | Papel |
 |---|---|
 | `plugins/with-boot-receiver.js` | Cria 6 classes Java + registra receivers no AndroidManifest |
-| `plugins/with-no-launcher-icon.js` | Remove app da gaveta (invisivel para o operador) |
+| ~~`plugins/with-no-launcher-icon.js`~~ | REMOVIDO em v1.1.1 — causava getLaunchIntentForPackage null |
 
 ### 6 Classes Java geradas pelo plugin (criadas no build)
 
@@ -106,8 +113,8 @@ eas build --platform android --profile preview --non-interactive
 | `ImeiPackage` | (registro do modulo) | Registra ImeiModule no ReactApplication |
 | `BootReceiver` | BOOT_COMPLETED, QUICKBOOT_POWERON | Agenda alarme 3h + abre app + envia localizacao boot |
 | `ShutdownReceiver` | ACTION_SHUTDOWN, ACTION_REBOOT | POST sincrono status=offline com localizacao, timeout 4s |
-| `AlarmReceiver` | com.system.posservice.BACKUP_PING | POST sincrono status=online a cada 3h |
-| `AlarmScheduler` | (chamado pelo BootReceiver) | AlarmManager.setInexactRepeating a cada 3h |
+| `AlarmReceiver` | com.system.posservice.BACKUP_PING | POST status=online + ultima loc a cada 5min + reinicia MainActivity |
+| `AlarmScheduler` | (chamado pelo BootReceiver) | AlarmManager.setInexactRepeating a cada 5min |
 
 ---
 
@@ -130,12 +137,15 @@ O mesmo valor e usado pelo JS (via expo-application) e pelo Java nativo.
 ```
 LIGA:  BootReceiver → AlarmScheduler.schedule() → envia localizacao boot
          → startActivity(Main) → requestPermissions
-         → startLocationUpdatesAsync → exitApp()
+         → startLocationUpdatesAsync → finishActivity() (tela preta, ~1-2s)
          → GPS Task a cada 30s → heartbeat + location → Supabase
 
 DESLIGA: ShutdownReceiver → POST status=offline (timeout 4s) → dashboard offline
 
-BACKUP:  AlarmReceiver (a cada 3h) → POST status=online
+BACKUP (a cada 5min):
+  AlarmReceiver → POST status=online + ultima localizacao conhecida
+                → startActivity(Main) → GPS ainda rodando? retorna imediato
+                                      → GPS morto? relanca + fecha em 1s
 ```
 
 ---
