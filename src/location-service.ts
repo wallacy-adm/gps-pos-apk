@@ -10,32 +10,49 @@ export function locationProviderFromGpsEnabled(gpsEnabled: boolean): string {
  *   - Localização em foreground e background
  *   - READ_PHONE_STATE (para IMEI no Android 9)
  *
- * A isenção de otimização de bateria (REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
- * está declarada no manifest — garante que o serviço continue rodando
- * mesmo com tela desligada ou bloqueada.
+ * ESTRATÉGIA: verifica com get* (não-bloqueante, sem diálogo) antes de chamar request*.
+ * Se a permissão já está concedida → retorna imediatamente sem mostrar nada.
+ * Se não está concedida → tenta pedir via diálogo (protegido pelo withTimeout no chamador).
+ *
+ * MOTIVO: quando o app é iniciado pelo BootReceiver (background), o sistema Android
+ * pode suprimir diálogos de permissão silenciosamente. A chamada request* ficaria
+ * aguardando uma resposta que nunca vem. Verificar antes evita esse await infinito
+ * na maioria dos casos (permissões já foram concedidas na primeira instalação).
  */
 export async function requestPermissions(): Promise<boolean> {
-  const fg = await Location.requestForegroundPermissionsAsync();
-  if (fg.status !== 'granted') return false;
+  // Verifica foreground sem mostrar diálogo
+  const fgCheck = await Location.getForegroundPermissionsAsync();
+  if (fgCheck.status !== 'granted') {
+    const fg = await Location.requestForegroundPermissionsAsync();
+    if (fg.status !== 'granted') return false;
+  }
 
-  const bg = await Location.requestBackgroundPermissionsAsync();
-  if (bg.status !== 'granted') return false;
+  // Verifica background sem mostrar diálogo
+  const bgCheck = await Location.getBackgroundPermissionsAsync();
+  if (bgCheck.status !== 'granted') {
+    const bg = await Location.requestBackgroundPermissionsAsync();
+    if (bg.status !== 'granted') return false;
+  }
 
-  // Solicita READ_PHONE_STATE para leitura do IMEI (Android 9+)
+  // READ_PHONE_STATE: verifica antes de pedir para evitar diálogo desnecessário
   if (Platform.OS === 'android') {
     try {
-      await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE,
-        {
-          title: 'Identificação do Terminal',
-          message: 'Necessário para identificar este terminal no sistema.',
-          buttonPositive: 'Permitir',
-        }
+      const alreadyGranted = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE
       );
+      if (!alreadyGranted) {
+        await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE,
+          {
+            title: 'Identificação do Terminal',
+            message: 'Necessário para identificar este terminal no sistema.',
+            buttonPositive: 'Permitir',
+          }
+        );
+      }
     } catch (_) {
       // Não bloqueia o serviço se falhar — usa fallback Android ID
     }
-
   }
 
   return true;
