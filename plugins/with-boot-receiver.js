@@ -839,7 +839,10 @@ public class GpsLocationService extends Service {
 
     private LocationManager  locationManager;
     private LocationListener locationListener;
-    private volatile boolean listening = false;
+    private volatile boolean listening   = false;
+    private volatile boolean gpsHasFired = false;
+    private final android.os.Handler keepaliveHandler =
+        new android.os.Handler(android.os.Looper.getMainLooper());
 
     @Override
     public void onCreate() {
@@ -847,9 +850,10 @@ public class GpsLocationService extends Service {
         createNotificationChannel();
         startForeground(NOTIF_ID, buildNotification());
         startListening();
-        // Heartbeat imediato: garante status=online no Supabase durante cold start do GPS
-        // (GPS demora 2-4min pra fix — sem isso o cron de 2min marca offline)
+        // Heartbeat imediato no boot (t=0)
         sendBootHeartbeat();
+        // Keepalive a cada 60s até o GPS disparar — cobre cold start de GPS (2-7min)
+        scheduleKeepalive();
     }
 
     @Override
@@ -864,6 +868,7 @@ public class GpsLocationService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        keepaliveHandler.removeCallbacksAndMessages(null);
         stopListening();
         Log.w(TAG, "Servico destruido — START_STICKY ou AlarmReceiver vai reiniciar");
     }
@@ -875,6 +880,12 @@ public class GpsLocationService extends Service {
         locationListener = new LocationListener() {
             @Override
             public void onLocationChanged(Location loc) {
+                // Para o keepalive assim que o GPS dispara pela primeira vez
+                if (!gpsHasFired) {
+                    gpsHasFired = true;
+                    keepaliveHandler.removeCallbacksAndMessages(null);
+                    Log.i(TAG, "GPS fix recebido — keepalive cancelado");
+                }
                 new Thread(() -> sendToSupabase(loc)).start();
             }
             @Override public void onStatusChanged(String p, int s, Bundle e) {}
@@ -912,6 +923,55 @@ public class GpsLocationService extends Service {
             try { locationManager.removeUpdates(locationListener); } catch (Exception ignored) {}
         }
         listening = false;
+    }
+
+    // Envia ping sem coordenadas GPS a cada 60s enquanto aguarda o primeiro fix
+    private void scheduleKeepalive() {
+        keepaliveHandler.postDelayed(() -> {
+            if (!gpsHasFired) {
+                new Thread(this::sendKeepalive).start();
+                scheduleKeepalive(); // reagenda para +60s
+            }
+        }, 60_000L);
+    }
+
+    private void sendKeepalive() {
+        try {
+            String serial = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
+            String imei   = getImei();
+            String now    = isoNow(System.currentTimeMillis());
+            StringBuilder body = new StringBuilder();
+            body.append("{");
+            body.append("\\"serial\\":\\"").append(serial).append("\\",");
+            body.append("\\"status\\":\\"online\\",");
+            body.append("\\"last_seen_at\\":\\"").append(now).append("\\"");
+            if (imei != null && !imei.isEmpty()) {
+                body.append(",\\"imei\\":\\"").append(imei).append("\\"");
+            }
+            body.append("}");
+            HttpURLConnection conn = null;
+            try {
+                URL url = new URL(SUPABASE_URL + "/rest/v1/devices?on_conflict=serial");
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("apikey", ANON_KEY);
+                conn.setRequestProperty("Authorization", "Bearer " + ANON_KEY);
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setRequestProperty("Prefer", "resolution=merge-duplicates,return=minimal");
+                conn.setDoOutput(true);
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(8000);
+                byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
+                conn.setFixedLengthStreamingMode(bytes.length);
+                try (OutputStream os = conn.getOutputStream()) { os.write(bytes); }
+                int code = conn.getResponseCode();
+                Log.i(TAG, "Keepalive HTTP " + code);
+            } catch (Exception e) {
+                Log.w(TAG, "Keepalive erro: " + e.getMessage());
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        } catch (Exception ignored) {}
     }
 
     private void sendBootHeartbeat() {
