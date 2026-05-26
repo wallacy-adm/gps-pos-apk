@@ -245,7 +245,10 @@ public class BootReceiver extends BroadcastReceiver {
                         Location loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
                         if (loc == null) loc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
                         if (loc == null) loc = lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER);
-                        if (loc != null) { lat = loc.getLatitude(); lng = loc.getLongitude(); hasLoc = true; }
+                        // Só aceita se fresca (<2min) — evita coordenada obsoleta de sessão anterior
+                        if (loc != null && (System.currentTimeMillis() - loc.getTime()) < 2 * 60_000L) {
+                            lat = loc.getLatitude(); lng = loc.getLongitude(); hasLoc = true;
+                        }
                     }
                 }
                 String now = isoNow();
@@ -662,7 +665,10 @@ public class AlarmReceiver extends BroadcastReceiver {
                 Location loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
                 if (loc == null) loc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
                 if (loc == null) loc = lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER);
-                if (loc != null) { lat = loc.getLatitude(); lng = loc.getLongitude(); hasLoc = true; }
+                // Só usa se fresca (<2min) — evita coordenada obsoleta
+                if (loc != null && (System.currentTimeMillis() - loc.getTime()) < 2 * 60_000L) {
+                    lat = loc.getLatitude(); lng = loc.getLongitude(); hasLoc = true;
+                }
             }
         }
 
@@ -982,7 +988,8 @@ public class GpsLocationService extends Service {
                 String imei = getImei();
                 String now  = isoNow(System.currentTimeMillis());
 
-                // Pega última localização conhecida (pode ser de sessão anterior — OK)
+                // Só usa lastKnownLocation se for fresca (<2min) — evita enviar
+                // coordenada obsoleta de sessão anterior ao Supabase
                 double lat = 0; double lng = 0; boolean hasLoc = false;
                 try {
                     if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -992,7 +999,10 @@ public class GpsLocationService extends Service {
                             Location loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
                             if (loc == null) loc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
                             if (loc == null) loc = lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER);
-                            if (loc != null) { lat = loc.getLatitude(); lng = loc.getLongitude(); hasLoc = true; }
+                            // Só aceita se foi obtida nos últimos 2 minutos
+                            if (loc != null && (System.currentTimeMillis() - loc.getTime()) < 2 * 60_000L) {
+                                lat = loc.getLatitude(); lng = loc.getLongitude(); hasLoc = true;
+                            }
                         }
                     }
                 } catch (Exception ignored) {}
