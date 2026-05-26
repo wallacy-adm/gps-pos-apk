@@ -1,6 +1,6 @@
 # CLAUDE.md — GPS POS APK
 > Lido automaticamente pelo Claude Code ao abrir este projeto.
-> Ultima atualizacao: 2026-05-25 (noite) | Versao do codigo: versionCode 22 / v2.0.5
+> Ultima atualizacao: 2026-05-26 (manha) | Versao do codigo: versionCode 23 / v2.0.6
 
 ---
 
@@ -19,21 +19,32 @@ Envia localizacao GPS a cada 30s para o Supabase. Se disfarça como "Servicos do
 
 ---
 
-## STATUS ATUAL — 2026-05-25 (noite)
+## STATUS ATUAL — 2026-05-26 (manha)
 
-### Build atual — v2.0.5 / versionCode 22 — BUILDANDO no GitHub Actions
-Commits: v2.0.3 + v2.0.4 + v2.0.5 (keepalive + age check)
+### Build atual — v2.0.6 / versionCode 23 — BUILDANDO no GitHub Actions
+Commit: `29cb872` — memory leak fix: TaskManager.unregisterAllTasksAsync()
 
 **PENDENTE VALIDACAO no AR-SP5:**
-- [ ] Instalar via `adb install -r app-release.apk`
-- [ ] Reboot e confirmar: heartbeat t=0 no Supabase, keepalive a cada 60s, GPS cancela keepalive
-- [ ] Confirmar: sem coordenadas obsoletas (>2min) no boot heartbeat
+- [ ] Instalar via `adb install -r app-release.apk` (artifact gps-pos-apk-30/)
+- [ ] Reboot e confirmar: GPS_LOCATION_TASK SUMIU do logcat
+- [ ] Confirmar: sem crescimento de heap (memory estavel)
 
-### Build v2.0.4 / versionCode 21 — SUPERADO por v2.0.5
-Adicionou keepalive a cada 60s durante cold start GPS. Superado antes de ser testado.
+### Build v2.0.5 / versionCode 22 — VALIDADO PARCIALMENTE ✅
+Commit: `97902fa` — age check getLastKnownLocation() (<2min)
 
-### Build v2.0.3 / versionCode 20 — SUPERADO por v2.0.4
-Adicionou sendBootHeartbeat() no onCreate(). Superado antes de ser testado.
+**VALIDADO NO AR-SP5 em 2026-05-26:**
+- GPS fix: -7.205660, -35.885527 (12 satelites, 4m accuracy) ✅
+- OkHttp: 2 req a cada 30s (POST /devices + POST /locations) ✅
+- GpsLocationService ativo: Interval 30s, Currently active ✅
+- Boot: BootReceiver → GpsLocationService em 07:06:54 ✅
+- BUG ENCONTRADO: GPS_LOCATION_TASK (Expo legado) loop de 2s → memory leak
+  Heap crescia: 5MB→11MB→19MB→25MB em 4min → corrigido em v2.0.6
+
+### Build v2.0.4 / versionCode 21 — SUPERADO
+Adicionou keepalive a cada 60s durante cold start GPS.
+
+### Build v2.0.3 / versionCode 20 — SUPERADO
+Adicionou sendBootHeartbeat() no onCreate().
 
 ### Build v2.0.2 / versionCode 19 — VALIDADO ✅
 Commits: `b67bf35` (IMEI em GpsLocationService + buildDeviceBody + AlarmReceiver)
@@ -57,7 +68,8 @@ BootReceiver inicia o servico ANTES de qualquer Activity.
 ### Historico de builds
 | Build | versionCode | Resultado |
 |---|---|---|
-| Build v2.0.5 | 22 | **BUILDANDO** — age check getLastKnownLocation() (<2min) |
+| Build v2.0.6 | 23 | **BUILDANDO** — TaskManager.unregisterAllTasksAsync() (memory leak fix) |
+| Build v2.0.5 | 22 | **VALIDADO** — age check getLastKnownLocation() (<2min) |
 | Build v2.0.4 | 21 | Superado — keepalive 60s ate GPS fix |
 | Build v2.0.3 | 20 | Superado — sendBootHeartbeat() em onCreate() |
 | Build v2.0.2 | 19 | **VALIDADO** — IMEI em todos os receivers |
@@ -255,6 +267,7 @@ Configuracoes → Apps → Servicos do Sistema → Bateria → Sem restricao
 - `getLastKnownLocation()` SEMPRE com age check `< 2 * 60_000L` nos 3 lugares: sendBootHeartbeat(), BootReceiver, AlarmReceiver
 - `scheduleKeepalive()` — nunca remover. Cobre o cold start GPS (2-7min no AR-SP5)
 - `gpsHasFired` — flag volatile que cancela keepalive no primeiro onLocationChanged()
+- `TaskManager.unregisterAllTasksAsync()` NO STARTUP — obrigatorio em index.tsx. Sem isso, tasks Expo de versoes anteriores ficam registradas (adb install -r mantem dados do app) e causam memory leak fatal (~1h)
 - NUNCA declarar "pronto" sem evidencia no Supabase (log ou screenshot)
 
 ---
