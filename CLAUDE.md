@@ -21,10 +21,16 @@ Envia localizacao GPS a cada 30s para o Supabase. Se disfarça como "Servicos do
 
 ## STATUS ATUAL — 2026-05-25
 
-### Build atual — v2.0.2 / versionCode 19 — BUILD EM ANDAMENTO ⏳
+### Build atual — v2.0.2 / versionCode 19 — FUNCIONANDO ✅
 Commits: `b67bf35` (IMEI em GpsLocationService + buildDeviceBody + AlarmReceiver)
 
-### Build v2.0.1 / versionCode 18 — FUNCIONANDO ✅ (instalado no AR-SP5)
+**VALIDADO NO AR-SP5 em 2026-05-25:**
+- `imei: "861536050094847"` populado no Supabase apos reboot ✅
+- `status: "online"`, coordenadas presentes ✅
+- GpsLocationService rodando (`dumpsys activity services`) ✅
+- Dashboard mostra IMEI + "Primeira localizacao hoje" ✅
+
+### Build v2.0.1 / versionCode 18 — SUBSTITUIDO por v2.0.2
 Commits: `200e1cc` (unify serial ANDROID_ID)
 
 **VALIDADO NO AR-SP5 em 2026-05-25:**
@@ -56,8 +62,8 @@ Apos instalacao: dashboard mostra IMEI do dispositivo ao lado do ANDROID_ID.
 ### Historico de builds
 | Build | versionCode | Resultado |
 |---|---|---|
-| Build v2.0.2 | 19 | Em andamento — IMEI em todos os receivers |
-| Build v2.0.1 | 18 | **FUNCIONANDO** — serial unificado ANDROID_ID |
+| Build v2.0.2 | 19 | **FUNCIONANDO** — IMEI em todos os receivers |
+| Build v2.0.1 | 18 | Substituido por v2.0.2 |
 | Build v2.0.0 | 17 | **FUNCIONANDO** — GPS nativo Java completo |
 | Build v1.9.0 | 16 | Parcial — removeu stale check, mas LocationModule.kt ainda bloqueava |
 | Build v1.8.0 | 15 | Parcial — fix timeout, problema mais fundo |
