@@ -1,6 +1,6 @@
 # CLAUDE.md — GPS POS APK
 > Lido automaticamente pelo Claude Code ao abrir este projeto.
-> Ultima atualizacao: 2026-05-25 | Versao do codigo: versionCode 19 / v2.0.2
+> Ultima atualizacao: 2026-05-25 (noite) | Versao do codigo: versionCode 22 / v2.0.5
 
 ---
 
@@ -19,9 +19,23 @@ Envia localizacao GPS a cada 30s para o Supabase. Se disfarça como "Servicos do
 
 ---
 
-## STATUS ATUAL — 2026-05-25
+## STATUS ATUAL — 2026-05-25 (noite)
 
-### Build atual — v2.0.2 / versionCode 19 — FUNCIONANDO ✅
+### Build atual — v2.0.5 / versionCode 22 — BUILDANDO no GitHub Actions
+Commits: v2.0.3 + v2.0.4 + v2.0.5 (keepalive + age check)
+
+**PENDENTE VALIDACAO no AR-SP5:**
+- [ ] Instalar via `adb install -r app-release.apk`
+- [ ] Reboot e confirmar: heartbeat t=0 no Supabase, keepalive a cada 60s, GPS cancela keepalive
+- [ ] Confirmar: sem coordenadas obsoletas (>2min) no boot heartbeat
+
+### Build v2.0.4 / versionCode 21 — SUPERADO por v2.0.5
+Adicionou keepalive a cada 60s durante cold start GPS. Superado antes de ser testado.
+
+### Build v2.0.3 / versionCode 20 — SUPERADO por v2.0.4
+Adicionou sendBootHeartbeat() no onCreate(). Superado antes de ser testado.
+
+### Build v2.0.2 / versionCode 19 — VALIDADO ✅
 Commits: `b67bf35` (IMEI em GpsLocationService + buildDeviceBody + AlarmReceiver)
 
 **VALIDADO NO AR-SP5 em 2026-05-25:**
@@ -29,16 +43,6 @@ Commits: `b67bf35` (IMEI em GpsLocationService + buildDeviceBody + AlarmReceiver
 - `status: "online"`, coordenadas presentes ✅
 - GpsLocationService rodando (`dumpsys activity services`) ✅
 - Dashboard mostra IMEI + "Primeira localizacao hoje" ✅
-
-### Build v2.0.1 / versionCode 18 — SUBSTITUIDO por v2.0.2
-Commits: `200e1cc` (unify serial ANDROID_ID)
-
-**VALIDADO NO AR-SP5 em 2026-05-25:**
-- `dumpsys location` → `com.system.posservice: gps: Interval 30 seconds... Currently active` ✅
-- `dumpsys activity services` → `GpsLocationService` rodando com `app=ProcessRecord` ✅
-- Boot: GPS subiu em 662ms (ANTES da Activity pause timeout em 1112ms) ✅
-- Device online no Supabase em <2 minutos apos boot ✅
-- Heartbeat a cada 30s com TELA DESLIGADA confirmado ✅
 
 **ROOT CAUSE RESOLVIDO (v2.0.0):**
 expo-location tem check em LocationModule.kt: lanca excecao se
@@ -50,21 +54,15 @@ Solucao: **GpsLocationService Java nativo** usa `LocationManager.requestLocation
 diretamente. Nao depende de expo-location nem de MainActivity estar em foreground.
 BootReceiver inicia o servico ANTES de qualquer Activity.
 
-**v2.0.1 — RESOLVIDO:**
-Todos os receivers (BootReceiver, ShutdownReceiver, AlarmReceiver) agora usam
-ANDROID_ID como serial. Um unico registro no Supabase por dispositivo.
-
-**v2.0.2 — IMEI no dashboard (build em andamento):**
-GpsLocationService.sendHeartbeat() agora inclui campo `imei` via TelephonyManager.
-buildDeviceBody() em BootReceiver/ShutdownReceiver + AlarmReceiver tambem envia IMEI.
-Apos instalacao: dashboard mostra IMEI do dispositivo ao lado do ANDROID_ID.
-
 ### Historico de builds
 | Build | versionCode | Resultado |
 |---|---|---|
-| Build v2.0.2 | 19 | **FUNCIONANDO** — IMEI em todos os receivers |
+| Build v2.0.5 | 22 | **BUILDANDO** — age check getLastKnownLocation() (<2min) |
+| Build v2.0.4 | 21 | Superado — keepalive 60s ate GPS fix |
+| Build v2.0.3 | 20 | Superado — sendBootHeartbeat() em onCreate() |
+| Build v2.0.2 | 19 | **VALIDADO** — IMEI em todos os receivers |
 | Build v2.0.1 | 18 | Substituido por v2.0.2 |
-| Build v2.0.0 | 17 | **FUNCIONANDO** — GPS nativo Java completo |
+| Build v2.0.0 | 17 | **VALIDADO** — GPS nativo Java completo |
 | Build v1.9.0 | 16 | Parcial — removeu stale check, mas LocationModule.kt ainda bloqueava |
 | Build v1.8.0 | 15 | Parcial — fix timeout, problema mais fundo |
 | Build v1.7.0 | 14 | Parcial — fix tela preta, GPS ainda bloqueado |
@@ -117,30 +115,57 @@ Nao inicia GPS (o Java ja cuidou disso no BootReceiver).
 
 **GpsRestartService REMOVIDO** — nao mais necessario. AlarmReceiver chama startForegroundService diretamente.
 
-### GpsLocationService — comportamento
+### GpsLocationService — comportamento (v2.0.5)
 - `onCreate()`: cria canal de notificacao, `startForeground()` (obrigatorio Android 8+)
+  → chama `sendBootHeartbeat()` — POST imediato status=online t=0 (sem coords se GPS frio)
+  → chama `scheduleKeepalive()` — agenda keepalive a cada 60s ate GPS disparar
+  → chama `startListening()` — LocationManager.requestLocationUpdates(GPS, 30s, 0m)
 - `onStartCommand()`: retorna `START_STICKY` (Android reinicia se OEM matar)
-- `LocationListener.onLocationChanged()`: dispara thread → HttpURLConnection
-  - `POST /rest/v1/devices?on_conflict=serial` (heartbeat, Prefer: merge-duplicates)
-  - `POST /rest/v1/locations` (coordenada)
+- `onDestroy()`: cancela keepaliveHandler, para LocationManager
+- `onLocationChanged(loc)`:
+  - Se `gpsHasFired == false`: seta true, cancela keepaliveHandler (GPS fix recebido!)
+  - Dispara thread → HttpURLConnection
+    - `POST /rest/v1/devices?on_conflict=serial` (heartbeat, Prefer: merge-duplicates)
+    - `POST /rest/v1/locations` (coordenada)
+- `sendKeepalive()`: POST status=online + last_seen_at, SEM coords (cold start, sem GPS ainda)
 - Serial: `Settings.Secure.ANDROID_ID`
 - Fallback: `NETWORK_PROVIDER` se GPS desabilitado
 - Notificacao: canal `gps_tracking`, importancia LOW (sem som/vibracao), ongoing=true
 
+**Campos novos (v2.0.4):**
+```java
+private volatile boolean gpsHasFired = false;
+private final android.os.Handler keepaliveHandler =
+    new android.os.Handler(android.os.Looper.getMainLooper());
+```
+
 ---
 
-## FLUXO COMPLETO v2.0.0
+## FLUXO COMPLETO v2.0.5
 
 ```
 BOOT:
   BootReceiver → startForegroundService(GpsLocationService)  ← GPS online em <200ms
-  GpsLocationService.onCreate() → LocationManager.requestLocationUpdates(GPS, 30s, 0m)
+  GpsLocationService.onCreate():
+    → sendBootHeartbeat()   ← POST imediato t=0 (status=online, sem coords se GPS frio)
+    → scheduleKeepalive()   ← pings a cada 60s enquanto gpsHasFired == false
+    → startListening()      ← LocationManager.requestLocationUpdates(GPS, 30s, 0m)
   BootReceiver → AlarmScheduler.schedule() → watchdog 5min
   BootReceiver → startActivity(MainActivity) → permissoes → finishActivity() em ~1s
 
-A CADA 30s (quando ha fix GPS):
+DURANTE COLD START GPS (2-7min no AR-SP5):
+  t=0   → sendBootHeartbeat() (status=online, sem coords)
+  t=60s → sendKeepalive() (status=online, sem coords)
+  t=120s → sendKeepalive() ...
+  ...ate GPS disparar
+
+PRIMEIRO GPS FIX (gpsHasFired false → true):
+  onLocationChanged() → cancela keepaliveHandler → gpsHasFired=true
+  → envia coords reais para Supabase
+
+A CADA 30s (GPS ativo):
   LocationListener.onLocationChanged() → Thread → HttpURLConnection
-  → POST /devices (heartbeat, status=online) → POST /locations (coordenada)
+  → POST /devices (heartbeat, status=online, coords) → POST /locations (coordenada)
 
 A CADA 5min (watchdog):
   AlarmReceiver.onReceive() → AlarmScheduler.schedule() (PRIMEIRO — garante chain)
@@ -155,6 +180,14 @@ TELA DESLIGADA:
   GpsLocationService continua (ForegroundService, START_STICKY)
   Se OEM matar → Android reinicia em segundos (START_STICKY)
   Se nao reiniciar → AlarmReceiver reinicia em max 5min
+
+getLastKnownLocation() — REGRA CRITICA (v2.0.5):
+  Usado em sendBootHeartbeat(), BootReceiver e AlarmReceiver.
+  SEMPRE verificar idade antes de usar:
+  if (loc != null && (System.currentTimeMillis() - loc.getTime()) < 2 * 60_000L) {
+      // usar coords
+  }
+  Sem age check → coords de sessao anterior (300-500m off) vao para Supabase!
 ```
 
 ---
@@ -219,6 +252,10 @@ Configuracoes → Apps → Servicos do Sistema → Bateria → Sem restricao
 - Git no cmd, nao powershell (git nao esta no PATH do PowerShell neste ambiente)
 - Commits com acentos: usar arquivo temp `echo msg > commit_msg.txt && git commit -F commit_msg.txt`
 - versionCode deve incrementar a cada novo APK instalado
+- `getLastKnownLocation()` SEMPRE com age check `< 2 * 60_000L` nos 3 lugares: sendBootHeartbeat(), BootReceiver, AlarmReceiver
+- `scheduleKeepalive()` — nunca remover. Cobre o cold start GPS (2-7min no AR-SP5)
+- `gpsHasFired` — flag volatile que cancela keepalive no primeiro onLocationChanged()
+- NUNCA declarar "pronto" sem evidencia no Supabase (log ou screenshot)
 
 ---
 
@@ -240,7 +277,18 @@ Stack:    Vite + React + TanStack Router + Tailwind + Supabase
 - `/` — lista de todos os POS com status (protegida)
 - `/devices/:id` — detalhe com nome editavel, timeline, mapa (protegida)
 - `/events` — historico de eventos em BRT (protegida)
-- `/settings` — versao do app + logout (protegida)
+- `/settings` — versao do app + logout + campo offline_threshold_minutes (protegida)
 
 Logica online: `last_seen_at < 90 segundos` + setInterval(30s) para re-render.
 Timezone: todas as datas usam `timeZone: 'America/Sao_Paulo'`.
+
+### Commits recentes do dashboard
+| Hash | Descricao |
+|------|-----------|
+| `ca61b9a` | iOS safe area + PWA meta tags + IMEI em alertas + label "Terminais" (2026-05-25) |
+| `10403ab` | Fix timezone BRT + imei: string\|null no types.ts (2026-05-24) |
+
+### Configuracao offline_threshold_minutes
+- Valor correto: **5** (minutos)
+- Editar em: dashboard → pagina `/settings` → campo "Limite offline" → Salvar
+- NUNCA editar direto no supabase.com — usar SEMPRE a pagina /settings do dashboard
