@@ -1,4 +1,5 @@
 import { registerRootComponent } from 'expo';
+import * as TaskManager from 'expo-task-manager';
 import { useEffect } from 'react';
 import { BackHandler, NativeModules, View } from 'react-native';
 import { requestPermissions } from './src/location-service';
@@ -30,6 +31,12 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 function App() {
   useEffect(() => {
     (async () => {
+      // 0. Remove tasks Expo legadas (v1.x usava BackgroundFetch/TaskManager)
+      //    Sem isso, GPS_LOCATION_TASK fica em loop de 2s causando memory leak
+      try {
+        await TaskManager.unregisterAllTasksAsync();
+      } catch (_) {}
+
       // 1. Permissoes — com timeout 5s
       try {
         await withTimeout(requestPermissions(), 5_000);
