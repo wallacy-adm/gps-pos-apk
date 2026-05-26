@@ -847,6 +847,9 @@ public class GpsLocationService extends Service {
         createNotificationChannel();
         startForeground(NOTIF_ID, buildNotification());
         startListening();
+        // Heartbeat imediato: garante status=online no Supabase durante cold start do GPS
+        // (GPS demora 2-4min pra fix — sem isso o cron de 2min marca offline)
+        sendBootHeartbeat();
     }
 
     @Override
@@ -909,6 +912,67 @@ public class GpsLocationService extends Service {
             try { locationManager.removeUpdates(locationListener); } catch (Exception ignored) {}
         }
         listening = false;
+    }
+
+    private void sendBootHeartbeat() {
+        new Thread(() -> {
+            try {
+                String serial = Settings.Secure.getString(
+                    getContentResolver(), Settings.Secure.ANDROID_ID);
+                String imei = getImei();
+                String now  = isoNow(System.currentTimeMillis());
+
+                // Pega última localização conhecida (pode ser de sessão anterior — OK)
+                double lat = 0; double lng = 0; boolean hasLoc = false;
+                try {
+                    if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                            == PackageManager.PERMISSION_GRANTED) {
+                        LocationManager lm = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+                        if (lm != null) {
+                            Location loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+                            if (loc == null) loc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                            if (loc == null) loc = lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER);
+                            if (loc != null) { lat = loc.getLatitude(); lng = loc.getLongitude(); hasLoc = true; }
+                        }
+                    }
+                } catch (Exception ignored) {}
+
+                StringBuilder body = new StringBuilder();
+                body.append("{");
+                body.append("\\"serial\\":\\"").append(serial).append("\\",");
+                body.append("\\"status\\":\\"online\\",");
+                body.append("\\"last_seen_at\\":\\"").append(now).append("\\"");
+                if (hasLoc) {
+                    body.append(",\\"last_lat\\":").append(String.format(Locale.US, "%.8f", lat));
+                    body.append(",\\"last_lng\\":").append(String.format(Locale.US, "%.8f", lng));
+                }
+                if (imei != null && !imei.isEmpty()) {
+                    body.append(",\\"imei\\":\\"").append(imei).append("\\"");
+                }
+                body.append("}");
+
+                HttpURLConnection conn = null;
+                try {
+                    URL url = new URL(SUPABASE_URL + "/rest/v1/devices?on_conflict=serial");
+                    conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.setRequestProperty("apikey", ANON_KEY);
+                    conn.setRequestProperty("Authorization", "Bearer " + ANON_KEY);
+                    conn.setRequestProperty("Content-Type", "application/json");
+                    conn.setRequestProperty("Prefer", "resolution=merge-duplicates,return=minimal");
+                    conn.setDoOutput(true);
+                    conn.setConnectTimeout(8000);
+                    conn.setReadTimeout(8000);
+                    byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
+                    conn.setFixedLengthStreamingMode(bytes.length);
+                    try (OutputStream os = conn.getOutputStream()) { os.write(bytes); }
+                    conn.getResponseCode();
+                } catch (Exception ignored) {
+                } finally {
+                    if (conn != null) conn.disconnect();
+                }
+            } catch (Exception ignored) {}
+        }).start();
     }
 
     private String getImei() {
