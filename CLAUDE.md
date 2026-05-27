@@ -1,6 +1,6 @@
 # CLAUDE.md — GPS POS APK
 > Lido automaticamente pelo Claude Code ao abrir este projeto.
-> Ultima atualizacao: 2026-05-26 (manha) | Versao do codigo: versionCode 23 / v2.0.6
+> Ultima atualizacao: 2026-05-27 (madrugada) | Versao do codigo: versionCode 26 / v2.0.9
 
 ---
 
@@ -19,15 +19,44 @@ Envia localizacao GPS a cada 30s para o Supabase. Se disfarça como "Servicos do
 
 ---
 
-## STATUS ATUAL — 2026-05-26 (manha)
+## STATUS ATUAL — 2026-05-27 (madrugada)
 
-### Build atual — v2.0.6 / versionCode 23 — BUILDANDO no GitHub Actions
+### Build atual — v2.0.9 / versionCode 26 — VALIDADO no AR-SP5 ✅
+Commit: `bdfec23` — preferir NETWORK_PROVIDER (Wi-Fi) sobre GPS em indoor
+
+**VALIDADO NO AR-SP5 em 2026-05-27:**
+- NETWORK_PROVIDER habilitado via `settings put secure location_providers_allowed +network` ✅
+- NETWORK registrado com intervalo 15s (GPS 30s) ✅
+- NETWORK fix aceito: acc=20.9m, 42.0m, 70.2m (todos < 200m) ✅
+- GPS bloqueado quando NETWORK fresco (<5min) ✅
+- Coordenadas NETWORK: lat=-7.205651, lng=-35.885517 (~15m do local correto) ✅
+- OkHttp sendRequest<< confirmado apos cada fix de rede ✅
+- Precisao anterior (v2.0.8): ~150m (GPS A-GPS/celular fake)
+- Precisao atual (v2.0.9): ~15m (Wi-Fi NETWORK_PROVIDER)
+- artifact: gps-pos-apk-35/ (GitHub Actions run 26486993076)
+
+**CONFIGURACAO OBRIGATORIA no AR-SP5 (feita 2026-05-27):**
+- Localização → Modo → "Precisao de Local" LIGADA (Wi-Fi + rede movel habilitados)
+- Ou via ADB: `settings put secure location_providers_allowed +network`
+- SEM esta config: NETWORK_PROVIDER fica desabilitado → GPS A-GPS retorna (~150m erro)
+
+### Build v2.0.8 / versionCode 25 — SUPERADO
+Commit: filtro por precisao 100m — GPS ainda errava ~150m (A-GPS fake fix)
+
+### Build v2.0.7 / versionCode 24 — SUPERADO
+Commit: wake lock + IMEI serial + filtro GPS_PROVIDER only (ERRO: bloqueou WiFi)
+
+### Build v2.0.6 / versionCode 23 — VALIDADO no AR-SP5 ✅
 Commit: `29cb872` — memory leak fix: TaskManager.unregisterAllTasksAsync()
 
-**PENDENTE VALIDACAO no AR-SP5:**
-- [ ] Instalar via `adb install -r app-release.apk` (artifact gps-pos-apk-30/)
-- [ ] Reboot e confirmar: GPS_LOCATION_TASK SUMIU do logcat
-- [ ] Confirmar: sem crescimento de heap (memory estavel)
+**VALIDADO NO AR-SP5 em 2026-05-26 (tarde):**
+- GPS_LOCATION_TASK: 0 ocorrencias no logcat ✅ (era loop de 2s → crash OOM em ~1h)
+- TaskService: "Unregistering all tasks for app com.system.posservice" no boot ✅
+- Heap estavel: Java Heap 5.6MB (era 25MB com leak em 4min) ✅
+- Keepalive HTTP 200 durante cold start GPS ✅
+- GPS fix recebido → keepalive cancelado ✅
+- Location HTTP 201 a cada 30s ✅
+- artifact: gps-pos-apk-31/ (GitHub Actions run 26446744022)
 
 ### Build v2.0.5 / versionCode 22 — VALIDADO PARCIALMENTE ✅
 Commit: `97902fa` — age check getLastKnownLocation() (<2min)
@@ -269,6 +298,11 @@ Configuracoes → Apps → Servicos do Sistema → Bateria → Sem restricao
 - `gpsHasFired` — flag volatile que cancela keepalive no primeiro onLocationChanged()
 - `TaskManager.unregisterAllTasksAsync()` NO STARTUP — obrigatorio em index.tsx. Sem isso, tasks Expo de versoes anteriores ficam registradas (adb install -r mantem dados do app) e causam memory leak fatal (~1h)
 - NUNCA declarar "pronto" sem evidencia no Supabase (log ou screenshot)
+- `lastNetworkFixTime` — campo volatile em GpsLocationService. Se NETWORK fix fresco (<5min), GPS BLOQUEADO. MediaTek MT6761 usa A-GPS/celular em indoor → reporta 7-8m mas erro real ~150m
+- `NETWORK_PROVIDER interval = 15s` (NET_TIME_MS) — mais rapido que GPS (30s) para manter lastNetworkFixTime fresco
+- Threshold NETWORK: `accuracy > 200f` → rejeita. GPS: `accuracy > 100f` → rejeita (mais restrito)
+- `adb force-stop` coloca app em stopped=true → BootReceiver nao recebe BOOT_COMPLETED no proximo boot. Se usar force-stop, fazer `am start MainActivity` antes de rebotar
+- CONFIGURACAO OBRIGATORIA no dispositivo: Localizacao → Precisao de Local → LIGADA (habilita NETWORK_PROVIDER). Sem isso, localização fica ~150m errada (GPS A-GPS fake). Via ADB: `settings put secure location_providers_allowed +network`
 
 ---
 
