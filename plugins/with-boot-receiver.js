@@ -385,7 +385,7 @@ public class BootReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.7\\"");
+        sb.append(",\\"app_version\\":\\"2.0.8\\"");
         sb.append("}");
         return sb.toString();
     }
@@ -566,7 +566,7 @@ public class ShutdownReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.7\\"");
+        sb.append(",\\"app_version\\":\\"2.0.8\\"");
         sb.append("}");
         return sb.toString();
     }
@@ -704,11 +704,18 @@ public class AlarmReceiver extends BroadcastReceiver {
                 == PackageManager.PERMISSION_GRANTED) {
             LocationManager lm = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
             if (lm != null) {
-                Location loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-                if (loc == null) loc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
-                if (loc == null) loc = lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER);
-                // Só usa se fresca (<2min) — evita coordenada obsoleta
-                if (loc != null && (System.currentTimeMillis() - loc.getTime()) < 2 * 60_000L) {
+                Location gpsLoc  = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+                Location netLoc  = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                long nowMs = System.currentTimeMillis();
+                Location loc = null;
+                for (Location candidate : new Location[]{ gpsLoc, netLoc }) {
+                    if (candidate == null) continue;
+                    if ((nowMs - candidate.getTime()) > 2 * 60_000L) continue;
+                    if (!candidate.hasAccuracy() || candidate.getAccuracy() > 100f) continue;
+                    if (loc == null || candidate.getAccuracy() < loc.getAccuracy()) loc = candidate;
+                }
+                // Só usa se fresca (<2min) e precisa (<=100m) — evita coordenada obsoleta ou imprecisa
+                if (loc != null) {
                     lat = loc.getLatitude(); lng = loc.getLongitude(); hasLoc = true;
                 }
             }
@@ -726,7 +733,7 @@ public class AlarmReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.7\\"");
+        sb.append(",\\"app_version\\":\\"2.0.8\\"");
         sb.append("}");
         postToSupabase(sb.toString());
 
@@ -858,7 +865,7 @@ public class GpsLocationService extends Service {
     private static final String CHANNEL_ID   = "gps_tracking";
     private static final long   MIN_TIME_MS  = 30_000L;
     private static final float  MIN_DIST_M   = 0f;
-    private static final String APP_VERSION  = "2.0.7";
+    private static final String APP_VERSION  = "2.0.8";
 
     private LocationManager  locationManager;
     private LocationListener locationListener;
@@ -917,9 +924,10 @@ public class GpsLocationService extends Service {
         locationListener = new LocationListener() {
             @Override
             public void onLocationChanged(Location loc) {
-                // Rejeita localizações de NETWORK_PROVIDER (precisão celular/WiFi inaceitável).
-                // NETWORK permanece registrado como fallback de resiliência mas não envia coords.
-                if (loc == null || !LocationManager.GPS_PROVIDER.equals(loc.getProvider())) return;
+                // Rejeita fix com precisão pior que 100m.
+                // WiFi NETWORK_PROVIDER: 10-30m → aceito. GPS externo: 3-15m → aceito.
+                // GPS interno fraco: 200m+ → rejeitado. Antena celular: 500-2000m → rejeitado.
+                if (loc == null || !loc.hasAccuracy() || loc.getAccuracy() > 100f) return;
                 // Para o keepalive assim que o GPS dispara pela primeira vez
                 if (!gpsHasFired) {
                     gpsHasFired = true;
@@ -1022,19 +1030,25 @@ public class GpsLocationService extends Service {
                 String imei = DeviceIdentifier.readImei(getApplicationContext());
                 String now  = isoNow(System.currentTimeMillis());
 
-                // Só usa lastKnownLocation se for fresca (<2min) — evita enviar
-                // coordenada obsoleta de sessão anterior ao Supabase
+                // Só usa lastKnownLocation se for fresca (<2min) e precisa (<=100m) — evita enviar
+                // coordenada obsoleta ou imprecisa de sessão anterior ao Supabase
                 double lat = 0; double lng = 0; boolean hasLoc = false;
                 try {
                     if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
                             == PackageManager.PERMISSION_GRANTED) {
                         LocationManager lm = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
                         if (lm != null) {
-                            Location loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-                            if (loc == null) loc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
-                            if (loc == null) loc = lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER);
-                            // Só aceita se foi obtida nos últimos 2 minutos
-                            if (loc != null && (System.currentTimeMillis() - loc.getTime()) < 2 * 60_000L) {
+                            Location gpsLoc  = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+                            Location netLoc  = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                            long now2 = System.currentTimeMillis();
+                            Location loc = null;
+                            for (Location candidate : new Location[]{ gpsLoc, netLoc }) {
+                                if (candidate == null) continue;
+                                if ((now2 - candidate.getTime()) > 2 * 60_000L) continue;
+                                if (!candidate.hasAccuracy() || candidate.getAccuracy() > 100f) continue;
+                                if (loc == null || candidate.getAccuracy() < loc.getAccuracy()) loc = candidate;
+                            }
+                            if (loc != null) {
                                 lat = loc.getLatitude(); lng = loc.getLongitude(); hasLoc = true;
                             }
                         }
