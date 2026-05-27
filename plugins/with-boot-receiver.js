@@ -38,8 +38,23 @@ public class DeviceIdentifier {
     public static String getSerial(Context ctx) {
         SharedPreferences prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         String cached = prefs.getString(KEY_SERIAL, null);
-        if (cached != null && !cached.isEmpty()) return cached;
 
+        if (cached != null && !cached.isEmpty()) {
+            // Migracao automatica: se o serial em cache nao e IMEI (ex: ANDROID_ID hex),
+            // tenta obter o IMEI. Se disponivel, atualiza o cache para usar IMEI.
+            // Isso corrige dispositivos instalados com versoes antigas que cachearam ANDROID_ID.
+            if (!isImeiFormat(cached)) {
+                String imei = readImei(ctx);
+                if (imei != null) {
+                    android.util.Log.i("DeviceIdentifier", "Migrando serial " + cached + " -> IMEI " + imei);
+                    prefs.edit().putString(KEY_SERIAL, imei).apply();
+                    return imei;
+                }
+            }
+            return cached;
+        }
+
+        // Primeira execucao — determina serial
         String imei = readImei(ctx);
         String serial = (imei != null)
             ? imei
@@ -47,6 +62,11 @@ public class DeviceIdentifier {
 
         prefs.edit().putString(KEY_SERIAL, serial).apply();
         return serial;
+    }
+
+    /** IMEI valido: exatamente 15 digitos numericos. ANDROID_ID e hex com 16 chars. */
+    private static boolean isImeiFormat(String s) {
+        return s != null && s.matches("\\\\d{15}");
     }
 
     /**
@@ -866,13 +886,14 @@ public class GpsLocationService extends Service {
     private static final long   MIN_TIME_MS  = 30_000L;
     private static final long   NET_TIME_MS  = 15_000L; // NETWORK atualiza mais rapido
     private static final float  MIN_DIST_M   = 0f;
-    private static final String APP_VERSION  = "2.0.9";
+    private static final String APP_VERSION  = "2.0.10";
 
     private LocationManager  locationManager;
     private LocationListener locationListener;
-    private volatile boolean listening          = false;
-    private volatile boolean gpsHasFired        = false;
-    private volatile long    lastNetworkFixTime  = 0L; // preferencia NETWORK sobre GPS
+    private volatile boolean  listening           = false;
+    private volatile long     lastNetworkFixTime  = 0L;     // preferencia NETWORK sobre GPS
+    private volatile android.location.Location lastKnownLocation = null; // ultimo fix recebido
+    private volatile long     lastSentTime        = 0L;     // evita heartbeats redundantes
     private final android.os.Handler keepaliveHandler =
         new android.os.Handler(android.os.Looper.getMainLooper());
     private PowerManager.WakeLock wakeLock;
@@ -894,8 +915,8 @@ public class GpsLocationService extends Service {
         startListening();
         // Heartbeat imediato no boot (t=0)
         sendBootHeartbeat();
-        // Keepalive a cada 60s até o GPS disparar — cobre cold start de GPS (2-7min)
-        scheduleKeepalive();
+        // Heartbeat permanente a cada 30s — garante device online mesmo com tela apagada
+        scheduleHeartbeat();
     }
 
     @Override
@@ -950,12 +971,9 @@ public class GpsLocationService extends Service {
                     Log.i(TAG, "GPS fix aceito (sem rede): acc=" + accuracy + "m");
                 }
 
-                // Para o keepalive assim que qualquer fix e recebido
-                if (!gpsHasFired) {
-                    gpsHasFired = true;
-                    keepaliveHandler.removeCallbacksAndMessages(null);
-                    Log.i(TAG, "Primeiro fix recebido — keepalive cancelado");
-                }
+                // Salva o ultimo fix para o heartbeat permanente usar
+                lastKnownLocation = loc;
+                lastSentTime = System.currentTimeMillis();
                 new Thread(() -> sendToSupabase(loc)).start();
             }
             @Override public void onStatusChanged(String p, int s, Bundle e) {}
@@ -995,14 +1013,25 @@ public class GpsLocationService extends Service {
         listening = false;
     }
 
-    // Envia ping sem coordenadas GPS a cada 60s enquanto aguarda o primeiro fix
-    private void scheduleKeepalive() {
+    // Heartbeat permanente a cada 30s — independe dos provedores de localizacao.
+    // Garante que o device permanece "online" mesmo com tela apagada (WiFi dorme,
+    // GPS bloqueado por Doze). Se ha um fix recente (< 25s), nao reenvia para
+    // evitar duplicidade com o onLocationChanged.
+    private void scheduleHeartbeat() {
         keepaliveHandler.postDelayed(() -> {
-            if (!gpsHasFired) {
-                new Thread(this::sendKeepalive).start();
-                scheduleKeepalive(); // reagenda para +60s
+            long timeSinceSent = System.currentTimeMillis() - lastSentTime;
+            if (timeSinceSent >= 25_000L) {
+                android.location.Location loc = lastKnownLocation;
+                if (loc != null) {
+                    Log.i(TAG, "Heartbeat: enviando ultimo fix conhecido (age=" + (timeSinceSent/1000) + "s)");
+                    new Thread(() -> sendToSupabase(loc)).start();
+                } else {
+                    Log.i(TAG, "Heartbeat: sem fix ainda, enviando keepalive");
+                    new Thread(this::sendKeepalive).start();
+                }
             }
-        }, 60_000L);
+            scheduleHeartbeat(); // sempre reagenda — nao para nunca
+        }, 30_000L);
     }
 
     private void sendKeepalive() {
@@ -1119,7 +1148,9 @@ public class GpsLocationService extends Service {
     private void sendToSupabase(Location loc) {
         String serial   = DeviceIdentifier.getSerial(getApplicationContext());
         String imei     = DeviceIdentifier.readImei(getApplicationContext());
-        String now      = isoNow(loc.getTime());
+        // last_seen_at sempre = agora (System.currentTimeMillis).
+        // Garante device "online" mesmo quando reenviamos um fix cacheado.
+        String now      = isoNow(System.currentTimeMillis());
         double lat      = loc.getLatitude();
         double lng      = loc.getLongitude();
         Float  accuracy = loc.hasAccuracy() ? loc.getAccuracy() : null;
