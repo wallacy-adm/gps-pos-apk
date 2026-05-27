@@ -864,13 +864,15 @@ public class GpsLocationService extends Service {
     private static final int    NOTIF_ID     = 99;
     private static final String CHANNEL_ID   = "gps_tracking";
     private static final long   MIN_TIME_MS  = 30_000L;
+    private static final long   NET_TIME_MS  = 15_000L; // NETWORK atualiza mais rapido
     private static final float  MIN_DIST_M   = 0f;
-    private static final String APP_VERSION  = "2.0.8";
+    private static final String APP_VERSION  = "2.0.9";
 
     private LocationManager  locationManager;
     private LocationListener locationListener;
-    private volatile boolean listening   = false;
-    private volatile boolean gpsHasFired = false;
+    private volatile boolean listening          = false;
+    private volatile boolean gpsHasFired        = false;
+    private volatile long    lastNetworkFixTime  = 0L; // preferencia NETWORK sobre GPS
     private final android.os.Handler keepaliveHandler =
         new android.os.Handler(android.os.Looper.getMainLooper());
     private PowerManager.WakeLock wakeLock;
@@ -924,15 +926,35 @@ public class GpsLocationService extends Service {
         locationListener = new LocationListener() {
             @Override
             public void onLocationChanged(Location loc) {
-                // Rejeita fix com precisão pior que 100m.
-                // WiFi NETWORK_PROVIDER: 10-30m → aceito. GPS externo: 3-15m → aceito.
-                // GPS interno fraco: 200m+ → rejeitado. Antena celular: 500-2000m → rejeitado.
-                if (loc == null || !loc.hasAccuracy() || loc.getAccuracy() > 100f) return;
-                // Para o keepalive assim que o GPS dispara pela primeira vez
+                if (loc == null || !loc.hasAccuracy()) return;
+                float   accuracy   = loc.getAccuracy();
+                boolean isNetwork  = LocationManager.NETWORK_PROVIDER.equals(loc.getProvider());
+
+                if (isNetwork) {
+                    // NETWORK_PROVIDER (Wi-Fi / rede): mais preciso em ambiente indoor.
+                    // Aceita ate 200m — Wi-Fi tipico: 10-30m, celular: 100-500m.
+                    if (accuracy > 200f) return;
+                    lastNetworkFixTime = System.currentTimeMillis();
+                    Log.i(TAG, "NETWORK fix aceito: acc=" + accuracy + "m provider=" + loc.getProvider());
+                } else {
+                    // GPS_PROVIDER: se temos fix de rede recente (<5min), ignorar GPS.
+                    // GPS em indoor usa A-GPS via celular → reporta 7-8m mas erro real ~150m.
+                    // Wi-Fi (NETWORK) e mais confiavel que GPS A-GPS em ambiente fechado.
+                    long networkAge = System.currentTimeMillis() - lastNetworkFixTime;
+                    if (lastNetworkFixTime > 0 && networkAge < 5 * 60_000L) {
+                        // Fix de rede fresco — descarta GPS para evitar sobreposicao errada
+                        return;
+                    }
+                    // Sem fix de rede: usa GPS com filtro de precisao padrao
+                    if (accuracy > 100f) return;
+                    Log.i(TAG, "GPS fix aceito (sem rede): acc=" + accuracy + "m");
+                }
+
+                // Para o keepalive assim que qualquer fix e recebido
                 if (!gpsHasFired) {
                     gpsHasFired = true;
                     keepaliveHandler.removeCallbacksAndMessages(null);
-                    Log.i(TAG, "GPS fix recebido — keepalive cancelado");
+                    Log.i(TAG, "Primeiro fix recebido — keepalive cancelado");
                 }
                 new Thread(() -> sendToSupabase(loc)).start();
             }
@@ -951,9 +973,9 @@ public class GpsLocationService extends Service {
             }
             if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
                 locationManager.requestLocationUpdates(
-                    LocationManager.NETWORK_PROVIDER, MIN_TIME_MS, MIN_DIST_M, locationListener);
+                    LocationManager.NETWORK_PROVIDER, NET_TIME_MS, MIN_DIST_M, locationListener);
                 ok = true;
-                Log.i(TAG, "NETWORK_PROVIDER iniciado (fallback)");
+                Log.i(TAG, "NETWORK_PROVIDER iniciado — preferido sobre GPS em indoor");
             }
             listening = ok;
             if (!ok) {
