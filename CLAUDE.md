@@ -1,6 +1,6 @@
 # CLAUDE.md — GPS POS APK
 > Lido automaticamente pelo Claude Code ao abrir este projeto.
-> Ultima atualizacao: 2026-05-27 (madrugada) | Versao do codigo: versionCode 26 / v2.0.9
+> Ultima atualizacao: 2026-05-27 | Versao do codigo: versionCode 27 / v2.0.10
 
 ---
 
@@ -19,9 +19,35 @@ Envia localizacao GPS a cada 30s para o Supabase. Se disfarça como "Servicos do
 
 ---
 
-## STATUS ATUAL — 2026-05-27 (madrugada)
+## STATUS ATUAL — 2026-05-27
 
-### Build atual — v2.0.9 / versionCode 26 — VALIDADO no AR-SP5 ✅
+### Build atual — v2.0.10 / versionCode 27 — BUILDANDO ⏳
+Commit: `3c1e114` — heartbeat permanente + migracao automatica IMEI
+
+**BUG 1 RESOLVIDO (device offline com tela apagada):**
+- Root cause: scheduleKeepalive() parava apos 1o fix → sem heartbeat com tela off
+- Fix: scheduleHeartbeat() permanente a cada 30s, nunca para
+- Usa lastKnownLocation (ultimo fix cacheado) quando providers dormem (WiFi dorme com tela off)
+- sendToSupabase() usa System.currentTimeMillis() para last_seen_at
+  → device fica "online" mesmo reenviando fix antigo
+
+**BUG 2 RESOLVIDO (IMEI nao mostrado — V2 usando ANDROID_ID):**
+- Root cause: SharedPreferences preservado pelo adb install -r → V2 cacheava ANDROID_ID
+- Fix: DeviceIdentifier.getSerial() detecta cache nao-IMEI e migra automaticamente
+- isImeiFormat(): valida \\d{15} — ANDROID_ID tem 16 chars hex, nao passa
+- Na V2: proximo boot com v2.0.10 migra 5c12bcd5a53227d1 → IMEI 862595062719725
+
+**VALIDADO NO AR-SP5 em 2026-05-27:**
+- v2.0.10 instalado, BootReceiver disparou, TaskService limpou tasks legadas ✅
+- NETWORK fix aceito: acc=22.5m logo apos boot ✅
+- Com tela APAGADA: NETWORK_PROVIDER continua ativo (cell tower fallback, acc=100m) ✅
+- 3 minutos com tela apagada → status=online, last_seen_at fresco (01:11 BRT) ✅
+- Bug "tela off → offline" RESOLVIDO — nunca foi offline no teste
+- app_version="2.0.10" confirmado no Supabase ✅
+
+**PENDENTE: instalar v2.0.10 na V2 e validar migração IMEI**
+
+### Build v2.0.9 / versionCode 26 — VALIDADO no AR-SP5 ✅
 Commit: `bdfec23` — preferir NETWORK_PROVIDER (Wi-Fi) sobre GPS em indoor
 
 **VALIDADO NO AR-SP5 em 2026-05-27:**
@@ -34,6 +60,8 @@ Commit: `bdfec23` — preferir NETWORK_PROVIDER (Wi-Fi) sobre GPS em indoor
 - Precisao anterior (v2.0.8): ~150m (GPS A-GPS/celular fake)
 - Precisao atual (v2.0.9): ~15m (Wi-Fi NETWORK_PROVIDER)
 - artifact: gps-pos-apk-35/ (GitHub Actions run 26486993076)
+
+**BUG ABERTO em v2.0.9: device offline com tela apagada (corrigido em v2.0.10)**
 
 **CONFIGURACAO OBRIGATORIA no AR-SP5 (feita 2026-05-27):**
 - Localização → Modo → "Precisao de Local" LIGADA (Wi-Fi + rede movel habilitados)
