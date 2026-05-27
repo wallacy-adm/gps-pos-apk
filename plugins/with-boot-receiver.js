@@ -456,7 +456,7 @@ public class BootReceiver extends BroadcastReceiver {
                 // Extrai "id":"UUID" do JSON
                 int idx = resp.indexOf("\\"id\\":\\"");
                 if (idx >= 0) {
-                    int start = idx + 7;
+                    int start = idx + 6;
                     int end = resp.indexOf("\\"", start);
                     if (end > start) return resp.substring(start, end);
                 }
@@ -633,7 +633,7 @@ public class ShutdownReceiver extends BroadcastReceiver {
                 String resp = sb.toString();
                 int idx = resp.indexOf("\\"id\\":\\"");
                 if (idx >= 0) {
-                    int start = idx + 7;
+                    int start = idx + 6;
                     int end = resp.indexOf("\\"", start);
                     if (end > start) return resp.substring(start, end);
                 }
@@ -886,7 +886,7 @@ public class GpsLocationService extends Service {
     private static final long   MIN_TIME_MS  = 30_000L;
     private static final long   NET_TIME_MS  = 15_000L; // NETWORK atualiza mais rapido
     private static final float  MIN_DIST_M   = 0f;
-    private static final String APP_VERSION  = "2.0.10";
+    private static final String APP_VERSION  = "2.0.11";
 
     private LocationManager  locationManager;
     private LocationListener locationListener;
@@ -1206,7 +1206,7 @@ public class GpsLocationService extends Service {
                 String resp = sb.toString();
                 int idx = resp.indexOf("\\"id\\":\\"");
                 if (idx >= 0) {
-                    int start = idx + 7;
+                    int start = idx + 6;
                     int end   = resp.indexOf("\\"", start);
                     if (end > start) return resp.substring(start, end);
                 }
