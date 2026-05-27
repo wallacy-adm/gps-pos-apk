@@ -9,6 +9,108 @@ const SUPABASE_URL = 'https://pbzoggfmegmawbnmblpm.supabase.co';
 const ANON_KEY     = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBiem9nZ2ZtZWdtYXdibm1ibHBtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzMDYzOTksImV4cCI6MjA5NDg4MjM5OX0.OpRY-AH7vHsQYHzi39QpqiYL_uNxWOZFE_pYvOSo3Ic';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DeviceIdentifier — única fonte de verdade para serial e IMEI
+// Serial = IMEI (se disponível) com fallback para ANDROID_ID
+// Cacheado em SharedPreferences — nunca muda após primeira leitura
+// ─────────────────────────────────────────────────────────────────────────────
+const DEVICE_IDENTIFIER_JAVA = `package com.system.posservice;
+
+import android.Manifest;
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.os.Build;
+import android.provider.Settings;
+import android.telephony.TelephonyManager;
+import androidx.core.content.ContextCompat;
+
+public class DeviceIdentifier {
+
+    private static final String PREFS       = "posservice_device";
+    private static final String KEY_SERIAL  = "serial";
+    private static final String KEY_IMEI    = "imei";
+
+    /**
+     * Retorna o serial estável do dispositivo.
+     * Preferência: IMEI (único por hardware) > ANDROID_ID (pode colidir).
+     * Resultado cacheado em SharedPreferences — não muda entre reinicializações.
+     */
+    public static String getSerial(Context ctx) {
+        SharedPreferences prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        String cached = prefs.getString(KEY_SERIAL, null);
+        if (cached != null && !cached.isEmpty()) return cached;
+
+        String imei = readImei(ctx);
+        String serial = (imei != null)
+            ? imei
+            : Settings.Secure.getString(ctx.getContentResolver(), Settings.Secure.ANDROID_ID);
+
+        prefs.edit().putString(KEY_SERIAL, serial).apply();
+        return serial;
+    }
+
+    /**
+     * Lê o IMEI do dispositivo.
+     * Cadeia de fallback: getImei() → getImei(0) → getDeviceId() → getDeviceId(0) → null
+     * Resultado cacheado em SharedPreferences.
+     */
+    public static String readImei(Context ctx) {
+        SharedPreferences prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        String cached = prefs.getString(KEY_IMEI, null);
+        // Sentinela "NONE" evita re-tentativas desnecessárias em dispositivos sem IMEI
+        if ("NONE".equals(cached)) return null;
+        if (cached != null && !cached.isEmpty()) return cached;
+
+        String imei = null;
+        try {
+            if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_PHONE_STATE)
+                    == PackageManager.PERMISSION_GRANTED) {
+
+                TelephonyManager tm =
+                    (TelephonyManager) ctx.getSystemService(Context.TELEPHONY_SERVICE);
+                if (tm != null) {
+                    // Tentativa 1: getImei() — API 26+
+                    if (Build.VERSION.SDK_INT >= 26) {
+                        try { imei = tm.getImei(); } catch (Exception ignored) {}
+                        if (isValid(imei)) { cache(prefs, imei); return imei; }
+                    }
+                    // Tentativa 2: getImei(0) — slot 0 explícito, API 26+
+                    if (Build.VERSION.SDK_INT >= 26) {
+                        try { imei = tm.getImei(0); } catch (Exception ignored) {}
+                        if (isValid(imei)) { cache(prefs, imei); return imei; }
+                    }
+                    // Tentativa 3: getDeviceId() — depreciado mas funciona em Android <10
+                    try {
+                        @SuppressWarnings("deprecation")
+                        String id = tm.getDeviceId();
+                        if (isValid(id)) { cache(prefs, id); return id; }
+                    } catch (Exception ignored) {}
+                    // Tentativa 4: getDeviceId(0) — slot 0 explícito
+                    try {
+                        @SuppressWarnings("deprecation")
+                        String id = tm.getDeviceId(0);
+                        if (isValid(id)) { cache(prefs, id); return id; }
+                    } catch (Exception ignored) {}
+                }
+            }
+        } catch (Exception ignored) {}
+
+        // Nenhuma tentativa retornou IMEI — marca sentinela para não tentar de novo
+        prefs.edit().putString(KEY_IMEI, "NONE").apply();
+        return null;
+    }
+
+    private static boolean isValid(String s) {
+        return s != null && s.length() >= 14 && s.matches("[0-9]+");
+    }
+
+    private static void cache(SharedPreferences prefs, String imei) {
+        prefs.edit().putString(KEY_IMEI, imei).apply();
+    }
+}
+`;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ImeiModule — bridge nativo React Native (old arch) que expõe getImei() para JS
 // Lê IMEI via TelephonyManager (Android 9 suporta sem restrição com READ_PHONE_STATE)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -177,8 +279,6 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.location.Location;
 import android.location.LocationManager;
-import android.provider.Settings;
-import android.telephony.TelephonyManager;
 import androidx.core.content.ContextCompat;
 
 import java.io.OutputStream;
@@ -235,7 +335,8 @@ public class BootReceiver extends BroadcastReceiver {
         final Context appCtx = context.getApplicationContext();
         new Thread(() -> {
             try {
-                String serial = Settings.Secure.getString(appCtx.getContentResolver(), Settings.Secure.ANDROID_ID);
+                String serial = DeviceIdentifier.getSerial(appCtx);
+                String imei   = DeviceIdentifier.readImei(appCtx);
                 double lat = 0, lng = 0;
                 boolean hasLoc = false;
                 if (ContextCompat.checkSelfPermission(appCtx, Manifest.permission.ACCESS_FINE_LOCATION)
@@ -252,7 +353,6 @@ public class BootReceiver extends BroadcastReceiver {
                     }
                 }
                 String now = isoNow();
-                String imei = getRealImei(appCtx);
                 String devBody = buildDeviceBody(serial, imei, "online", now, hasLoc, lat, lng);
                 String deviceId = upsertDeviceAndGetId(devBody);
                 if (deviceId != null) {
@@ -271,35 +371,6 @@ public class BootReceiver extends BroadcastReceiver {
         }).start();
     }
 
-    private String getImei(Context context) {
-        try {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE)
-                    == PackageManager.PERMISSION_GRANTED) {
-                TelephonyManager tm = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
-                if (tm != null) {
-                    String imei = tm.getImei();
-                    if (imei != null && imei.length() >= 14) return imei;
-                }
-            }
-        } catch (Exception ignored) {}
-        // Fallback para Android ID
-        return Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
-    }
-
-    private String getRealImei(Context context) {
-        try {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE)
-                    == PackageManager.PERMISSION_GRANTED) {
-                TelephonyManager tm = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
-                if (tm != null) {
-                    String imei = tm.getImei();
-                    if (imei != null && imei.length() >= 14) return imei;
-                }
-            }
-        } catch (Exception ignored) {}
-        return null;
-    }
-
     private String buildDeviceBody(String serial, String imei, String status, String now,
                                    boolean hasLoc, double lat, double lng) {
         StringBuilder sb = new StringBuilder();
@@ -314,6 +385,7 @@ public class BootReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
+        sb.append(",\\"app_version\\":\\"2.0.7\\"");
         sb.append("}");
         return sb.toString();
     }
@@ -421,8 +493,6 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.location.Location;
 import android.location.LocationManager;
-import android.provider.Settings;
-import android.telephony.TelephonyManager;
 import androidx.core.content.ContextCompat;
 
 import java.io.OutputStream;
@@ -448,7 +518,8 @@ public class ShutdownReceiver extends BroadcastReceiver {
             return;
         }
 
-        String serial = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
+        String serial = DeviceIdentifier.getSerial(context);
+        String imei   = DeviceIdentifier.readImei(context);
         String now    = isoNow();
 
         // Captura última localização conhecida (não requer novo fix GPS)
@@ -466,7 +537,6 @@ public class ShutdownReceiver extends BroadcastReceiver {
         }
 
         // 1. Upsert device (status=offline, com localização de desligamento)
-        String imei = getRealImei(context);
         String devBody = buildDeviceBody(serial, imei, "offline", now, hasLoc, lat, lng);
         String deviceId = upsertDeviceAndGetId(devBody);
 
@@ -480,34 +550,6 @@ public class ShutdownReceiver extends BroadcastReceiver {
                 : "Desliga " + timeStr2 + " | localização não disponível";
             postEvent(buildEventBody(deviceId, "shutdown", desc, hasLoc, lat, lng, now));
         }
-    }
-
-    private String getImei(Context context) {
-        try {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE)
-                    == PackageManager.PERMISSION_GRANTED) {
-                TelephonyManager tm = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
-                if (tm != null) {
-                    String imei = tm.getImei();
-                    if (imei != null && imei.length() >= 14) return imei;
-                }
-            }
-        } catch (Exception ignored) {}
-        return Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
-    }
-
-    private String getRealImei(Context context) {
-        try {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE)
-                    == PackageManager.PERMISSION_GRANTED) {
-                TelephonyManager tm = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
-                if (tm != null) {
-                    String imei = tm.getImei();
-                    if (imei != null && imei.length() >= 14) return imei;
-                }
-            }
-        } catch (Exception ignored) {}
-        return null;
     }
 
     private String buildDeviceBody(String serial, String imei, String status, String now,
@@ -524,6 +566,7 @@ public class ShutdownReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
+        sb.append(",\\"app_version\\":\\"2.0.7\\"");
         sb.append("}");
         return sb.toString();
     }
@@ -626,8 +669,6 @@ import android.content.pm.PackageManager;
 import android.location.Location;
 import android.location.LocationManager;
 import android.os.Build;
-import android.provider.Settings;
-import android.telephony.TelephonyManager;
 import androidx.core.content.ContextCompat;
 
 import java.io.OutputStream;
@@ -652,7 +693,8 @@ public class AlarmReceiver extends BroadcastReceiver {
         // Reagenda PRIMEIRO — garante continuidade do alarm chain mesmo se HTTP falhar ou travar
         AlarmScheduler.schedule(context);
 
-        String serial = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
+        String serial = DeviceIdentifier.getSerial(context);
+        String imei   = DeviceIdentifier.readImei(context);
         String now    = isoNow();
 
         // Tenta capturar última localização conhecida para atualizar last_lat/last_lng
@@ -673,18 +715,6 @@ public class AlarmReceiver extends BroadcastReceiver {
         }
 
         // Envia ping com localização disponível
-        String imei = null;
-        try {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE)
-                    == PackageManager.PERMISSION_GRANTED) {
-                android.telephony.TelephonyManager tm2 = (android.telephony.TelephonyManager)
-                    context.getSystemService(Context.TELEPHONY_SERVICE);
-                if (tm2 != null) {
-                    String rawImei = tm2.getImei();
-                    if (rawImei != null && rawImei.length() >= 14) imei = rawImei;
-                }
-            }
-        } catch (Exception ignored) {}
         StringBuilder sb = new StringBuilder();
         sb.append("{\\"serial\\":\\"").append(serial).append("\\",");
         sb.append("\\"status\\":\\"online\\",");
@@ -696,6 +726,7 @@ public class AlarmReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
+        sb.append(",\\"app_version\\":\\"2.0.7\\"");
         sb.append("}");
         postToSupabase(sb.toString());
 
@@ -711,20 +742,6 @@ public class AlarmReceiver extends BroadcastReceiver {
                 context.startService(gps);
             }
         } catch (Exception ignored) {}
-    }
-
-    private String getImei(Context context) {
-        try {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE)
-                    == PackageManager.PERMISSION_GRANTED) {
-                TelephonyManager tm = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
-                if (tm != null) {
-                    String imei = tm.getImei();
-                    if (imei != null && imei.length() >= 14) return imei;
-                }
-            }
-        } catch (Exception ignored) {}
-        return Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
     }
 
     private void postToSupabase(String body) {
@@ -816,11 +833,10 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.PowerManager;
 import android.Manifest;
 import android.content.pm.PackageManager;
 import android.os.IBinder;
-import android.provider.Settings;
-import android.telephony.TelephonyManager;
 import android.util.Log;
 import androidx.core.content.ContextCompat;
 
@@ -842,6 +858,7 @@ public class GpsLocationService extends Service {
     private static final String CHANNEL_ID   = "gps_tracking";
     private static final long   MIN_TIME_MS  = 30_000L;
     private static final float  MIN_DIST_M   = 0f;
+    private static final String APP_VERSION  = "2.0.7";
 
     private LocationManager  locationManager;
     private LocationListener locationListener;
@@ -849,12 +866,22 @@ public class GpsLocationService extends Service {
     private volatile boolean gpsHasFired = false;
     private final android.os.Handler keepaliveHandler =
         new android.os.Handler(android.os.Looper.getMainLooper());
+    private PowerManager.WakeLock wakeLock;
 
     @Override
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
         startForeground(NOTIF_ID, buildNotification());
+        // PARTIAL_WAKE_LOCK mantém CPU e GPS hardware ativos com tela desligada.
+        // MediaTek MT6761 desliga GPS sem este lock mesmo com ForegroundService ativo.
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        wakeLock = pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "com.system.posservice::GpsWakeLock"
+        );
+        wakeLock.setReferenceCounted(false);
+        wakeLock.acquire();
         startListening();
         // Heartbeat imediato no boot (t=0)
         sendBootHeartbeat();
@@ -873,6 +900,10 @@ public class GpsLocationService extends Service {
 
     @Override
     public void onDestroy() {
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+            wakeLock = null;
+        }
         super.onDestroy();
         keepaliveHandler.removeCallbacksAndMessages(null);
         stopListening();
@@ -886,6 +917,9 @@ public class GpsLocationService extends Service {
         locationListener = new LocationListener() {
             @Override
             public void onLocationChanged(Location loc) {
+                // Rejeita localizações de NETWORK_PROVIDER (precisão celular/WiFi inaceitável).
+                // NETWORK permanece registrado como fallback de resiliência mas não envia coords.
+                if (loc == null || !LocationManager.GPS_PROVIDER.equals(loc.getProvider())) return;
                 // Para o keepalive assim que o GPS dispara pela primeira vez
                 if (!gpsHasFired) {
                     gpsHasFired = true;
@@ -943,8 +977,8 @@ public class GpsLocationService extends Service {
 
     private void sendKeepalive() {
         try {
-            String serial = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
-            String imei   = getImei();
+            String serial = DeviceIdentifier.getSerial(getApplicationContext());
+            String imei   = DeviceIdentifier.readImei(getApplicationContext());
             String now    = isoNow(System.currentTimeMillis());
             StringBuilder body = new StringBuilder();
             body.append("{");
@@ -954,6 +988,7 @@ public class GpsLocationService extends Service {
             if (imei != null && !imei.isEmpty()) {
                 body.append(",\\"imei\\":\\"").append(imei).append("\\"");
             }
+            body.append(",\\"app_version\\":\\"").append(APP_VERSION).append("\\"");
             body.append("}");
             HttpURLConnection conn = null;
             try {
@@ -983,9 +1018,8 @@ public class GpsLocationService extends Service {
     private void sendBootHeartbeat() {
         new Thread(() -> {
             try {
-                String serial = Settings.Secure.getString(
-                    getContentResolver(), Settings.Secure.ANDROID_ID);
-                String imei = getImei();
+                String serial = DeviceIdentifier.getSerial(getApplicationContext());
+                String imei = DeviceIdentifier.readImei(getApplicationContext());
                 String now  = isoNow(System.currentTimeMillis());
 
                 // Só usa lastKnownLocation se for fresca (<2min) — evita enviar
@@ -1019,6 +1053,7 @@ public class GpsLocationService extends Service {
                 if (imei != null && !imei.isEmpty()) {
                     body.append(",\\"imei\\":\\"").append(imei).append("\\"");
                 }
+                body.append(",\\"app_version\\":\\"").append(APP_VERSION).append("\\"");
                 body.append("}");
 
                 HttpURLConnection conn = null;
@@ -1045,24 +1080,9 @@ public class GpsLocationService extends Service {
         }).start();
     }
 
-    private String getImei() {
-        try {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
-                    == PackageManager.PERMISSION_GRANTED) {
-                TelephonyManager tm = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
-                if (tm != null) {
-                    String imei = tm.getImei();
-                    if (imei != null && imei.length() >= 14) return imei;
-                }
-            }
-        } catch (Exception ignored) {}
-        return null;
-    }
-
     private void sendToSupabase(Location loc) {
-        String serial   = Settings.Secure.getString(
-            getContentResolver(), Settings.Secure.ANDROID_ID);
-        String imei     = getImei();
+        String serial   = DeviceIdentifier.getSerial(getApplicationContext());
+        String imei     = DeviceIdentifier.readImei(getApplicationContext());
         String now      = isoNow(loc.getTime());
         double lat      = loc.getLatitude();
         double lng      = loc.getLongitude();
@@ -1088,6 +1108,7 @@ public class GpsLocationService extends Service {
         if (imei != null && !imei.isEmpty()) {
             bodyBuilder.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
+        bodyBuilder.append(",\\"app_version\\":\\"").append(APP_VERSION).append("\\"");
         bodyBuilder.append("}");
         String body = bodyBuilder.toString();
 
@@ -1118,7 +1139,7 @@ public class GpsLocationService extends Service {
                 String resp = sb.toString();
                 int idx = resp.indexOf("\\"id\\":\\"");
                 if (idx >= 0) {
-                    int start = idx + 6;
+                    int start = idx + 7;
                     int end   = resp.indexOf("\\"", start);
                     if (end > start) return resp.substring(start, end);
                 }
@@ -1317,6 +1338,7 @@ module.exports = function withBootReceiver(config) {
       await fs.promises.mkdir(packageDir, { recursive: true });
 
       const files = {
+        'DeviceIdentifier.java'   : DEVICE_IDENTIFIER_JAVA,
         'ImeiModule.java'         : IMEI_MODULE_JAVA,
         'ImeiPackage.java'        : IMEI_PACKAGE_JAVA,
         'BootReceiver.java'       : BOOT_RECEIVER_JAVA,
