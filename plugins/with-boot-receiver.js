@@ -886,7 +886,7 @@ public class GpsLocationService extends Service {
     private static final long   MIN_TIME_MS  = 30_000L;
     private static final long   NET_TIME_MS  = 15_000L; // NETWORK atualiza mais rapido
     private static final float  MIN_DIST_M   = 0f;
-    private static final String APP_VERSION  = "2.0.11";
+    private static final String APP_VERSION  = "2.0.12";
 
     private LocationManager  locationManager;
     private LocationListener locationListener;
@@ -894,6 +894,7 @@ public class GpsLocationService extends Service {
     private volatile long     lastNetworkFixTime  = 0L;     // preferencia NETWORK sobre GPS
     private volatile android.location.Location lastKnownLocation = null; // ultimo fix recebido
     private volatile long     lastSentTime        = 0L;     // evita heartbeats redundantes
+    private volatile android.location.Location lastNetworkLocation = null; // ultimo NETWORK aceito — cross-validation contra A-GPS falso
     private final android.os.Handler keepaliveHandler =
         new android.os.Handler(android.os.Looper.getMainLooper());
     private PowerManager.WakeLock wakeLock;
@@ -956,19 +957,26 @@ public class GpsLocationService extends Service {
                     // Aceita ate 200m — Wi-Fi tipico: 10-30m, celular: 100-500m.
                     if (accuracy > 200f) return;
                     lastNetworkFixTime = System.currentTimeMillis();
+                    lastNetworkLocation = loc;
                     Log.i(TAG, "NETWORK fix aceito: acc=" + accuracy + "m provider=" + loc.getProvider());
                 } else {
-                    // GPS_PROVIDER: se temos fix de rede recente (<5min), ignorar GPS.
-                    // GPS em indoor usa A-GPS via celular → reporta 7-8m mas erro real ~150m.
-                    // Wi-Fi (NETWORK) e mais confiavel que GPS A-GPS em ambiente fechado.
+                    // GPS_PROVIDER: cross-validation contra NETWORK para bloquear A-GPS falso.
+                    // A-GPS indoor: acc=7-8m mas posicao errada de km (artefato de antena celular).
+                    // Janela de protecao: 20min (antes 5min) — A-GPS tipico aparece 30-45min apos boot.
                     long networkAge = System.currentTimeMillis() - lastNetworkFixTime;
-                    if (lastNetworkFixTime > 0 && networkAge < 5 * 60_000L) {
-                        // Fix de rede fresco — descarta GPS para evitar sobreposicao errada
-                        return;
+                    if (lastNetworkFixTime > 0 && networkAge < 20 * 60_000L) {
+                        // NETWORK recente: loga artefato e descarta GPS (NETWORK sempre tem prioridade indoor)
+                        if (lastNetworkLocation != null) {
+                            float dist = loc.distanceTo(lastNetworkLocation);
+                            if (dist > 500f) {
+                                Log.w(TAG, "GPS A-GPS rejeitado: " + (int)dist + "m longe do NETWORK fix (artefato)");
+                            }
+                        }
+                        return; // NETWORK recente sempre tem prioridade
                     }
-                    // Sem fix de rede: usa GPS com filtro de precisao padrao
+                    // NETWORK ausente ou antigo (>20min): aceita GPS com filtro padrao
                     if (accuracy > 100f) return;
-                    Log.i(TAG, "GPS fix aceito (sem rede): acc=" + accuracy + "m");
+                    Log.i(TAG, "GPS fix aceito (sem rede recente): acc=" + accuracy + "m");
                 }
 
                 // Salva o ultimo fix para o heartbeat permanente usar
@@ -1021,6 +1029,15 @@ public class GpsLocationService extends Service {
         keepaliveHandler.postDelayed(() -> {
             long timeSinceSent = System.currentTimeMillis() - lastSentTime;
             if (timeSinceSent >= 25_000L) {
+                // Expira cache se fix tem mais de 20min sem renovacao.
+                // Rede de seguranca: autocura posicao envenenada em no maximo 20min.
+                if (lastKnownLocation != null) {
+                    long fixAge = System.currentTimeMillis() - lastKnownLocation.getTime();
+                    if (fixAge > 20 * 60_000L) {
+                        Log.w(TAG, "Fix expirado (" + (fixAge/60000) + "min) — expirando cache, proximo heartbeat keepalive");
+                        lastKnownLocation = null;
+                    }
+                }
                 android.location.Location loc = lastKnownLocation;
                 if (loc != null) {
                     Log.i(TAG, "Heartbeat: enviando ultimo fix conhecido (age=" + (timeSinceSent/1000) + "s)");
