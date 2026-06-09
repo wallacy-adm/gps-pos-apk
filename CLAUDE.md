@@ -1,6 +1,6 @@
 # CLAUDE.md — GPS POS APK
 > Lido automaticamente pelo Claude Code ao abrir este projeto.
-> Ultima atualizacao: 2026-05-27 | Versao do codigo: versionCode 27 / v2.0.10
+> Ultima atualizacao: 2026-05-31 | Versao do codigo: versionCode 29 / v2.0.12
 
 ---
 
@@ -19,12 +19,29 @@ Envia localizacao GPS a cada 30s para o Supabase. Se disfarça como "Servicos do
 
 ---
 
-## STATUS ATUAL — 2026-05-27
+## STATUS ATUAL — 2026-05-31
 
-### Build atual — v2.0.10 / versionCode 27 — BUILDANDO ⏳
-Commit: `3c1e114` — heartbeat permanente + migracao automatica IMEI
+### Build atual — v2.0.12 / versionCode 29 — BUILD DISPARADO ⏳
+Commit: `8044f41` — cross-val GPS vs NETWORK (20min) + cache expiry 20min
 
-**BUG 1 RESOLVIDO (device offline com tela apagada):**
+**FIX AR-SP5 — Localização instável (pin pulando km):**
+- Root cause: A-GPS indoor aquecia após 30-45min, reportava acc=7-8m mas posição errada de km
+- Janela de proteção NETWORK estendida: 5min → 20min (`networkAge < 20 * 60_000L`)
+- Cross-validation: se GPS chegar >500m longe do último NETWORK fix → rejeitado com log
+- Cache expiry: `lastKnownLocation` com >20min de idade → expirado → heartbeat vira keepalive
+- Novo campo `lastNetworkLocation` armazena coordenada real do NETWORK para comparação
+- Zero impacto em devices com dados móveis (`lastNetworkFixTime = 0` → condição false)
+
+### Build anterior — v2.0.11 / versionCode 28 — VALIDADO ✅ AR-SP5 + V2
+Commit: `48902f3` — fix UUID off-by-one (idx+7 → idx+6)
+
+**BUG CRITICO RESOLVIDO (Primeira localizacao hoje vazia / Location HTTP 400):**
+- Root cause: sendHeartbeat() extraia UUID com idx+7 em vez de idx+6
+- "id":"  tem 6 chars; idx+7 pulava o 1o char do UUID → 35 chars → HTTP 400
+- locations table ficava vazia → dashboard mostrava "Sem localizacao registrada hoje"
+- Fix: replace_all idx+7 → idx+6 em 3 ocorrencias (extractDeviceUuid, sendHeartbeat x2)
+
+**BUG 2 RESOLVIDO (device offline com tela apagada) — v2.0.10:**
 - Root cause: scheduleKeepalive() parava apos 1o fix → sem heartbeat com tela off
 - Fix: scheduleHeartbeat() permanente a cada 30s, nunca para
 - Usa lastKnownLocation (ultimo fix cacheado) quando providers dormem (WiFi dorme com tela off)
