@@ -886,7 +886,7 @@ public class GpsLocationService extends Service {
     private static final long   MIN_TIME_MS  = 30_000L;
     private static final long   NET_TIME_MS  = 15_000L; // NETWORK atualiza mais rapido
     private static final float  MIN_DIST_M   = 0f;
-    private static final String APP_VERSION  = "2.0.12";
+    private static final String APP_VERSION  = "2.0.13";
 
     private LocationManager  locationManager;
     private LocationListener locationListener;
@@ -980,6 +980,8 @@ public class GpsLocationService extends Service {
                 }
 
                 // Salva o ultimo fix para o heartbeat permanente usar
+                // Sanity check: rejeita saltos fisicamente impossiveis
+                if (isImpossibleJump(loc)) return;
                 lastKnownLocation = loc;
                 lastSentTime = System.currentTimeMillis();
                 new Thread(() -> sendToSupabase(loc)).start();
@@ -1031,19 +1033,13 @@ public class GpsLocationService extends Service {
             if (timeSinceSent >= 25_000L) {
                 // Expira cache se fix tem mais de 20min sem renovacao.
                 // Rede de seguranca: autocura posicao envenenada em no maximo 20min.
-                if (lastKnownLocation != null) {
-                    long fixAge = System.currentTimeMillis() - lastKnownLocation.getTime();
-                    if (fixAge > 20 * 60_000L) {
-                        Log.w(TAG, "Fix expirado (" + (fixAge/60000) + "min) — expirando cache, proximo heartbeat keepalive");
-                        lastKnownLocation = null;
-                    }
-                }
                 android.location.Location loc = lastKnownLocation;
                 if (loc != null) {
                     Log.i(TAG, "Heartbeat: enviando ultimo fix conhecido (age=" + (timeSinceSent/1000) + "s)");
                     new Thread(() -> sendToSupabase(loc)).start();
                 } else {
                     Log.i(TAG, "Heartbeat: sem fix ainda, enviando keepalive");
+                    maybeRunIpGeolocationFallback();
                     new Thread(this::sendKeepalive).start();
                 }
             }
@@ -1288,6 +1284,86 @@ public class GpsLocationService extends Service {
             NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
             if (nm != null) nm.createNotificationChannel(ch);
         }
+    }
+
+
+    /**
+     * Rejeita saltos fisicamente impossiveis — detecta A-GPS e NETWORK artefatos.
+     * Velocidade maxima: 2 m/s (7.2 km/h) com tolerancia minima de 200m.
+     */
+    private boolean isImpossibleJump(Location newLoc) {
+        if (lastKnownLocation == null) return false;
+        float dist    = newLoc.distanceTo(lastKnownLocation);
+        long  elapsed = newLoc.getTime() - lastKnownLocation.getTime();
+        if (elapsed <= 0) return false;
+        float maxDist = Math.max((elapsed / 1000f) * 2.0f, 200f);
+        if (dist > maxDist) {
+            Log.w(TAG, "Jump impossivel: " + (int)dist + "m em " + (elapsed/1000)
+                + "s (max=" + (int)maxDist + "m) — rejeitado");
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Fallback de ultimo recurso: IP geolocation para devices sem GPS funcional (ex: CIE2020).
+     * Disparado apos 15min sem fix aceito, renovado a cada 1h.
+     * accuracy=50000f (50km) marca como aproximado no dashboard.
+     */
+    private void maybeRunIpGeolocationFallback() {
+        long now = System.currentTimeMillis();
+        if ((now - serviceStartTime)     < 15 * 60_000L) return;
+        if ((now - lastIpGeoAttemptTime) < 60 * 60_000L) return;
+        lastIpGeoAttemptTime = now;
+        new Thread(() -> {
+            java.net.HttpURLConnection conn = null;
+            try {
+                java.net.URL url = new java.net.URL(
+                    "http://ip-api.com/json/?fields=status,lat,lon,city,regionName");
+                conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(8000);
+                if (conn.getResponseCode() != 200) return;
+                java.io.InputStream is = conn.getInputStream();
+                byte[] buf = new byte[512];
+                StringBuilder sb = new StringBuilder();
+                int n;
+                while ((n = is.read(buf)) != -1)
+                    sb.append(new String(buf, 0, n, java.nio.charset.StandardCharsets.UTF_8));
+                String resp = sb.toString();
+                if (!resp.contains("\"success\"")) return;
+                double lat = extractJsonDouble(resp, "\"lat\":");
+                double lng = extractJsonDouble(resp, "\"lon\":");
+                if (lat == 0.0 && lng == 0.0) return;
+                Log.i(TAG, "IP geo fallback OK: lat=" + lat + " lng=" + lng);
+                Location ipLoc = new Location("ip");
+                ipLoc.setLatitude(lat);
+                ipLoc.setLongitude(lng);
+                ipLoc.setAccuracy(50000f);
+                ipLoc.setTime(System.currentTimeMillis());
+                lastKnownLocation = ipLoc;
+                lastSentTime = System.currentTimeMillis();
+                new Thread(() -> sendToSupabase(ipLoc)).start();
+            } catch (Exception e) {
+                Log.w(TAG, "IP geo fallback erro: " + e.getMessage());
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }).start();
+    }
+
+    private double extractJsonDouble(String json, String key) {
+        try {
+            int idx = json.indexOf(key);
+            if (idx < 0) return 0.0;
+            int start = idx + key.length();
+            while (start < json.length() && json.charAt(start) == ' ') start++;
+            int end = start;
+            while (end < json.length() && (Character.isDigit(json.charAt(end))
+                   || json.charAt(end) == '.' || json.charAt(end) == '-')) end++;
+            return Double.parseDouble(json.substring(start, end));
+        } catch (Exception e) { return 0.0; }
     }
 
     private Notification buildNotification() {
