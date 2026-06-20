@@ -1332,9 +1332,9 @@ public class GpsLocationService extends Service {
                 while ((n = is.read(buf)) != -1)
                     sb.append(new String(buf, 0, n, java.nio.charset.StandardCharsets.UTF_8));
                 String resp = sb.toString();
-                if (!resp.contains("\"success\"")) return;
-                double lat = extractJsonDouble(resp, "\"lat\":");
-                double lng = extractJsonDouble(resp, "\"lon\":");
+                if (!resp.contains("success")) return;
+                double lat = extractJsonDouble(resp, "lat");
+                double lng = extractJsonDouble(resp, "lon");
                 if (lat == 0.0 && lng == 0.0) return;
                 Log.i(TAG, "IP geo fallback OK: lat=" + lat + " lng=" + lng);
                 Location ipLoc = new Location("ip");
@@ -1358,7 +1358,10 @@ public class GpsLocationService extends Service {
             int idx = json.indexOf(key);
             if (idx < 0) return 0.0;
             int start = idx + key.length();
-            while (start < json.length() && json.charAt(start) == ' ') start++;
+            // pula aspas, dois-pontos e espacos ate o numero
+            while (start < json.length()
+                   && !Character.isDigit(json.charAt(start))
+                   && json.charAt(start) != '-') start++;
             int end = start;
             while (end < json.length() && (Character.isDigit(json.charAt(end))
                    || json.charAt(end) == '.' || json.charAt(end) == '-')) end++;
