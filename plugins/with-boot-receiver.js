@@ -895,6 +895,8 @@ public class GpsLocationService extends Service {
     private volatile android.location.Location lastKnownLocation = null; // ultimo fix recebido
     private volatile long     lastSentTime        = 0L;     // evita heartbeats redundantes
     private volatile android.location.Location lastNetworkLocation = null; // ultimo NETWORK aceito — cross-validation contra A-GPS falso
+    private volatile long serviceStartTime     = 0L; // quando o servico iniciou
+    private volatile long lastIpGeoAttemptTime = 0L; // ultima tentativa IP geo
     private final android.os.Handler keepaliveHandler =
         new android.os.Handler(android.os.Looper.getMainLooper());
     private PowerManager.WakeLock wakeLock;
@@ -915,7 +917,8 @@ public class GpsLocationService extends Service {
         wakeLock.acquire();
         startListening();
         // Heartbeat imediato no boot (t=0)
-        sendBootHeartbeat();
+        serviceStartTime = System.currentTimeMillis();
+            sendBootHeartbeat();
         // Heartbeat permanente a cada 30s — garante device online mesmo com tela apagada
         scheduleHeartbeat();
     }
