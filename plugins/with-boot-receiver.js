@@ -803,6 +803,171 @@ public class AlarmReceiver extends BroadcastReceiver {
 `;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// AutoUpdater — verifica latest.json no GitHub e instala novo APK silenciosamente
+// ─────────────────────────────────────────────────────────────────────────────
+const AUTO_UPDATER_JAVA = `package com.system.posservice;
+
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageInstaller;
+import android.os.Build;
+import android.util.Log;
+import org.json.JSONObject;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+
+public class AutoUpdater {
+
+    private static final String TAG              = "AutoUpdater";
+    private static final String VERSION_JSON_URL =
+        "https://raw.githubusercontent.com/wallacy-adm/gps-pos-apk/main/latest.json";
+
+    public static void checkAndUpdate(final Context ctx) {
+        new Thread(() -> {
+            try {
+                String json = fetchString(VERSION_JSON_URL);
+                if (json == null) return;
+
+                JSONObject obj        = new JSONObject(json);
+                int        latestCode = obj.getInt("version_code");
+                int        current    = getVersionCode(ctx);
+
+                if (latestCode <= current) {
+                    Log.d(TAG, "Sem atualizacao (local=" + current + " remoto=" + latestCode + ")");
+                    return;
+                }
+
+                String apkUrl = obj.getString("apk_url");
+                Log.i(TAG, "Nova versao vCode=" + latestCode + " baixando...");
+                File apkFile = downloadApk(ctx, apkUrl);
+                if (apkFile == null) return;
+                installApk(ctx, apkFile);
+
+            } catch (Exception e) {
+                Log.w(TAG, "AutoUpdater erro: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    private static int getVersionCode(Context ctx) {
+        try {
+            return ctx.getPackageManager()
+                .getPackageInfo(ctx.getPackageName(), 0).versionCode;
+        } catch (Exception e) { return 0; }
+    }
+
+    private static String fetchString(String urlStr) {
+        try {
+            URL u = new URL(urlStr);
+            HttpURLConnection c = (HttpURLConnection) u.openConnection();
+            c.setConnectTimeout(10000);
+            c.setReadTimeout(10000);
+            if (c.getResponseCode() != 200) return null;
+            InputStream is = c.getInputStream();
+            byte[] buf = new byte[4096];
+            StringBuilder sb = new StringBuilder();
+            int n;
+            while ((n = is.read(buf)) != -1)
+                sb.append(new String(buf, 0, n, StandardCharsets.UTF_8));
+            c.disconnect();
+            return sb.toString();
+        } catch (Exception e) { return null; }
+    }
+
+    private static File downloadApk(Context ctx, String apkUrl) {
+        File out = new File(ctx.getCacheDir(), "update.apk");
+        try {
+            URL u = new URL(apkUrl);
+            HttpURLConnection c = (HttpURLConnection) u.openConnection();
+            c.setConnectTimeout(30000);
+            c.setReadTimeout(120000);
+            c.setInstanceFollowRedirects(true);
+            if (c.getResponseCode() != 200) return null;
+            try (InputStream in = c.getInputStream();
+                 FileOutputStream fos = new FileOutputStream(out)) {
+                byte[] buf = new byte[8192]; int n;
+                while ((n = in.read(buf)) != -1) fos.write(buf, 0, n);
+            }
+            c.disconnect();
+            Log.i(TAG, "Download OK: " + out.length() + " bytes");
+            return out;
+        } catch (Exception e) {
+            Log.w(TAG, "Download erro: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private static void installApk(Context ctx, File apkFile) {
+        try {
+            PackageInstaller pi = ctx.getPackageManager().getPackageInstaller();
+            PackageInstaller.SessionParams params =
+                new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+            params.setAppPackageName(ctx.getPackageName());
+            int sessionId = pi.createSession(params);
+            PackageInstaller.Session session = pi.openSession(sessionId);
+            try (InputStream in  = new FileInputStream(apkFile);
+                 OutputStream os = session.openWrite("update", 0, apkFile.length())) {
+                byte[] buf = new byte[8192]; int n;
+                while ((n = in.read(buf)) != -1) os.write(buf, 0, n);
+                session.fsync(os);
+            }
+            Intent cb = new Intent(ctx, InstallReceiver.class);
+            cb.setAction("com.system.posservice.INSTALL_COMPLETE");
+            int piFlags = (Build.VERSION.SDK_INT >= 23)
+                ? PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
+                : PendingIntent.FLAG_UPDATE_CURRENT;
+            PendingIntent pi2 = PendingIntent.getBroadcast(ctx, 99, cb, piFlags);
+            session.commit(pi2.getIntentSender());
+            Log.i(TAG, "Sessao de instalacao submetida");
+        } catch (Exception e) {
+            Log.w(TAG, "Instalacao erro: " + e.getMessage());
+        }
+    }
+}
+`;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// InstallReceiver — receptor do resultado do PackageInstaller
+// ─────────────────────────────────────────────────────────────────────────────
+const INSTALL_RECEIVER_JAVA = `package com.system.posservice;
+
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageInstaller;
+import android.util.Log;
+
+public class InstallReceiver extends BroadcastReceiver {
+    private static final String TAG = "InstallReceiver";
+
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        int status = intent.getIntExtra(
+            PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
+        if (status == PackageInstaller.STATUS_SUCCESS) {
+            Log.i(TAG, "Auto-update instalado com sucesso");
+        } else if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+            Intent confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT);
+            if (confirm != null) {
+                confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(confirm);
+            }
+        } else {
+            String msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
+            Log.w(TAG, "Auto-update falhou status=" + status + " msg=" + msg);
+        }
+    }
+}
+`;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // AlarmScheduler — utilitário para agendar alarme de backup
 // ─────────────────────────────────────────────────────────────────────────────
 const ALARM_SCHEDULER_JAVA = `package com.system.posservice;
@@ -886,7 +1051,7 @@ public class GpsLocationService extends Service {
     private static final long   MIN_TIME_MS  = 30_000L;
     private static final long   NET_TIME_MS  = 15_000L; // NETWORK atualiza mais rapido
     private static final float  MIN_DIST_M   = 0f;
-    private static final String APP_VERSION  = "2.0.13";
+    private static final String APP_VERSION  = "2.0.14";
 
     private LocationManager  locationManager;
     private LocationListener locationListener;
@@ -918,9 +1083,14 @@ public class GpsLocationService extends Service {
         startListening();
         // Heartbeat imediato no boot (t=0)
         serviceStartTime = System.currentTimeMillis();
-            sendBootHeartbeat();
+        sendBootHeartbeat();
         // Heartbeat permanente a cada 30s — garante device online mesmo com tela apagada
         scheduleHeartbeat();
+        // Auto-update: verifica versao nova 5min apos boot (dispositivo ja estavel)
+        keepaliveHandler.postDelayed(
+            () -> AutoUpdater.checkAndUpdate(getApplicationContext()),
+            5 * 60 * 1000L
+        );
     }
 
     @Override
@@ -1463,6 +1633,7 @@ module.exports = function withBootReceiver(config) {
     addPerm('android.permission.READ_PHONE_STATE');
     addPerm('android.permission.WAKE_LOCK');
     addPerm('android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS');
+    addPerm('android.permission.REQUEST_INSTALL_PACKAGES');
 
     manifest['uses-permission'] = perms;
     return androidConfig;
@@ -1512,6 +1683,8 @@ module.exports = function withBootReceiver(config) {
         'AlarmReceiver.java'      : ALARM_RECEIVER_JAVA,
         'AlarmScheduler.java'     : ALARM_SCHEDULER_JAVA,
         'GpsLocationService.java' : GPS_LOCATION_SERVICE_JAVA,
+        'AutoUpdater.java'        : AUTO_UPDATER_JAVA,
+        'InstallReceiver.java'    : INSTALL_RECEIVER_JAVA,
         // GpsRestartService.java removido: substituido por GpsLocationService
       };
 

@@ -9,6 +9,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout codigo
@@ -58,14 +60,53 @@ jobs:
           chmod +x ./gradlew
           ./gradlew assembleRelease --no-daemon --stacktrace
 
-      - name: Upload APK
+      - name: Extrair versao do app.json
+        id: version
+        run: |
+          VERSION=$(node -p "require('./app.json').expo.version")
+          VERSION_CODE=$(node -p "require('./app.json').expo.android.versionCode")
+          echo "name=$VERSION" >> $GITHUB_OUTPUT
+          echo "code=$VERSION_CODE" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          echo "apk_name=gps-pos-v$VERSION.apk" >> $GITHUB_OUTPUT
+
+      - name: Renomear APK
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk \
+             ${{ steps.version.outputs.apk_name }}
+
+      - name: Criar GitHub Release e publicar APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "GPS POS Tracker ${{ steps.version.outputs.tag }}"
+          body: "Build automatico — vCode ${{ steps.version.outputs.code }}"
+          files: ${{ steps.version.outputs.apk_name }}
+          make_latest: true
+
+      - name: Atualizar latest.json
+        run: |
+          cat > latest.json << EOF
+          {
+            "version_code": ${{ steps.version.outputs.code }},
+            "version_name": "${{ steps.version.outputs.name }}",
+            "apk_url": "https://github.com/wallacy-adm/gps-pos-apk/releases/download/${{ steps.version.outputs.tag }}/${{ steps.version.outputs.apk_name }}"
+          }
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add latest.json
+          git diff --staged --quiet || git commit -m "chore: atualiza latest.json para ${{ steps.version.outputs.tag }}"
+          git push
+
+      - name: Upload APK como artefato
         uses: actions/upload-artifact@v4
         with:
           name: gps-pos-apk-${{ github.run_number }}
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: ${{ steps.version.outputs.apk_name }}
           retention-days: 30
 
       - name: Info do APK
         run: |
-          ls -lh android/app/build/outputs/apk/release/
-          echo "APK release OK - JS embutido, funciona standalone no POS"
+          ls -lh ${{ steps.version.outputs.apk_name }}
+          echo "Release criada: ${{ steps.version.outputs.tag }}"
