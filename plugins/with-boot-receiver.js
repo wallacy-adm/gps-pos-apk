@@ -77,8 +77,16 @@ public class DeviceIdentifier {
     public static String readImei(Context ctx) {
         SharedPreferences prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         String cached = prefs.getString(KEY_IMEI, null);
-        // Sentinela "NONE" evita re-tentativas desnecessárias em dispositivos sem IMEI
-        if ("NONE".equals(cached)) return null;
+        // Sentinela "NONE" evita re-tentativas, mas permite nova tentativa se permissao agora disponivel
+        if ("NONE".equals(cached)) {
+            if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_PHONE_STATE)
+                    == PackageManager.PERMISSION_GRANTED) {
+                prefs.edit().remove(KEY_IMEI).apply(); // limpa sentinela, forca releitura
+                android.util.Log.i("DeviceIdentifier", "Sentinela NONE limpa — retentando IMEI com permissao disponivel");
+            } else {
+                return null;
+            }
+        }
         if (cached != null && !cached.isEmpty()) return cached;
 
         String imei = null;
@@ -405,7 +413,7 @@ public class BootReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.8\\"");
+        sb.append(",\\"app_version\\":\\"2.0.15\\"");
         sb.append("}");
         return sb.toString();
     }
@@ -586,7 +594,7 @@ public class ShutdownReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.8\\"");
+        sb.append(",\\"app_version\\":\\"2.0.15\\"");
         sb.append("}");
         return sb.toString();
     }
@@ -753,7 +761,7 @@ public class AlarmReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.8\\"");
+        sb.append(",\\"app_version\\":\\"2.0.15\\"");
         sb.append("}");
         postToSupabase(sb.toString());
 
@@ -1051,7 +1059,7 @@ public class GpsLocationService extends Service {
     private static final long   MIN_TIME_MS  = 30_000L;
     private static final long   NET_TIME_MS  = 15_000L; // NETWORK atualiza mais rapido
     private static final float  MIN_DIST_M   = 0f;
-    private static final String APP_VERSION  = "2.0.14";
+    private static final String APP_VERSION  = "2.0.15";
 
     private LocationManager  locationManager;
     private LocationListener locationListener;
@@ -1062,6 +1070,11 @@ public class GpsLocationService extends Service {
     private volatile android.location.Location lastNetworkLocation = null; // ultimo NETWORK aceito — cross-validation contra A-GPS falso
     private volatile long serviceStartTime     = 0L; // quando o servico iniciou
     private volatile long lastIpGeoAttemptTime = 0L; // ultima tentativa IP geo
+    // Anti-poisoned-anchor: buffer de candidatos GPS aguardando convergencia
+    private final java.util.List<android.location.Location> gpsCandidates =
+        new java.util.ArrayList<>();
+    private static final int    GPS_CANDIDATE_WINDOW = 3;   // fixes necessarios para confirmar posicao
+    private static final float  GPS_CANDIDATE_RADIUS = 150f; // metros — A-GPS falso deriva mais
     private final android.os.Handler keepaliveHandler =
         new android.os.Handler(android.os.Looper.getMainLooper());
     private PowerManager.WakeLock wakeLock;
@@ -1132,6 +1145,23 @@ public class GpsLocationService extends Service {
                     lastNetworkFixTime = System.currentTimeMillis();
                     lastNetworkLocation = loc;
                     Log.i(TAG, "NETWORK fix aceito: acc=" + accuracy + "m provider=" + loc.getProvider());
+                    // Valida candidatos GPS represados contra NETWORK recebido
+                    if (!gpsCandidates.isEmpty()) {
+                        android.location.Location lastGps = gpsCandidates.get(gpsCandidates.size() - 1);
+                        float gpsDist = lastGps.distanceTo(loc);
+                        if (gpsDist <= 500f) {
+                            Log.i(TAG, "NETWORK confirma GPS candidato: " + (int)gpsDist + "m — promovendo");
+                            gpsCandidates.clear();
+                            if (!isImpossibleJump(lastGps)) {
+                                lastKnownLocation = lastGps;
+                                lastSentTime = System.currentTimeMillis();
+                                new Thread(() -> sendToSupabase(lastGps)).start();
+                            }
+                        } else {
+                            Log.w(TAG, "NETWORK rejeitou GPS: " + (int)gpsDist + "m — A-GPS falso descartado");
+                            gpsCandidates.clear();
+                        }
+                    }
                 } else {
                     // GPS_PROVIDER: cross-validation contra NETWORK para bloquear A-GPS falso.
                     // A-GPS indoor: acc=7-8m mas posicao errada de km (artefato de antena celular).
@@ -1147,9 +1177,17 @@ public class GpsLocationService extends Service {
                         }
                         return; // NETWORK recente sempre tem prioridade
                     }
-                    // NETWORK ausente ou antigo (>20min): aceita GPS com filtro padrao
+                    // NETWORK ausente ou antigo (>20min): GPS precisa convergir antes de aceitar
                     if (accuracy > 100f) return;
-                    Log.i(TAG, "GPS fix aceito (sem rede recente): acc=" + accuracy + "m");
+                    gpsCandidates.add(loc);
+                    if (gpsCandidates.size() > GPS_CANDIDATE_WINDOW) gpsCandidates.remove(0);
+                    if (!isGpsConverged()) {
+                        Log.i(TAG, "GPS candidato " + gpsCandidates.size() + "/" + GPS_CANDIDATE_WINDOW
+                                + " acc=" + accuracy + "m — aguardando convergencia");
+                        return; // nao aceita ate ter GPS_CANDIDATE_WINDOW fixes estaveis
+                    }
+                    Log.i(TAG, "GPS convergiu: " + GPS_CANDIDATE_WINDOW + " fixes estaveis aceitos");
+                    gpsCandidates.clear();
                 }
 
                 // Salva o ultimo fix para o heartbeat permanente usar
@@ -1459,6 +1497,20 @@ public class GpsLocationService extends Service {
         }
     }
 
+
+    /**
+     * Retorna true se os ultimos GPS_CANDIDATE_WINDOW fixes GPS estao dentro de GPS_CANDIDATE_RADIUS.
+     * A-GPS falso (baseado em torre celular) deriva mais que isso entre leituras.
+     * GPS real (satelite) converge a posicao estavel em multiplos fixes.
+     */
+    private boolean isGpsConverged() {
+        if (gpsCandidates.size() < GPS_CANDIDATE_WINDOW) return false;
+        android.location.Location ref = gpsCandidates.get(0);
+        for (int i = 1; i < gpsCandidates.size(); i++) {
+            if (ref.distanceTo(gpsCandidates.get(i)) > GPS_CANDIDATE_RADIUS) return false;
+        }
+        return true;
+    }
 
     /**
      * Rejeita saltos fisicamente impossiveis — detecta A-GPS e NETWORK artefatos.
