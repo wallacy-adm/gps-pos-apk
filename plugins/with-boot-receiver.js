@@ -139,6 +139,55 @@ public class DeviceIdentifier {
 `;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// LocationStore — FONTE UNICA DE VERDADE para a ultima localizacao VALIDADA.
+// GpsLocationService grava aqui SOMENTE apos passar pelo filtro anti-ancora-
+// envenenada (convergencia GPS 3x + cross-validation NETWORK). BootReceiver,
+// AlarmReceiver e ShutdownReceiver DEVEM ler daqui — nunca chamar
+// LocationManager.getLastKnownLocation() diretamente, pois isso ignora toda
+// a validacao e deixa vazar fixes A-GPS falsos / NETWORK de torre celular
+// direto para o dashboard.
+// ─────────────────────────────────────────────────────────────────────────────
+const LOCATION_STORE_JAVA = `package com.system.posservice;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+
+public class LocationStore {
+
+    private static final String PREFS    = "posservice_location";
+    private static final String KEY_LAT  = "vetted_lat";
+    private static final String KEY_LNG  = "vetted_lng";
+    private static final String KEY_TIME = "vetted_time";
+    private static final long   MAX_AGE_MS = 15 * 60_000L; // 15min
+
+    /** Chamado pelo GpsLocationService apos um fix passar por toda a validacao. */
+    public static void save(Context ctx, double lat, double lng) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_LAT, String.valueOf(lat))
+            .putString(KEY_LNG, String.valueOf(lng))
+            .putLong(KEY_TIME, System.currentTimeMillis())
+            .apply();
+    }
+
+    /** Retorna {lat, lng} se houver posicao validada com menos de 15min, senao null. */
+    public static double[] getIfFresh(Context ctx) {
+        SharedPreferences p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        long time = p.getLong(KEY_TIME, 0);
+        if (time == 0 || (System.currentTimeMillis() - time) > MAX_AGE_MS) return null;
+        String latS = p.getString(KEY_LAT, null);
+        String lngS = p.getString(KEY_LNG, null);
+        if (latS == null || lngS == null) return null;
+        try {
+            return new double[]{ Double.parseDouble(latS), Double.parseDouble(lngS) };
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+}
+`;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ImeiModule — bridge nativo React Native (old arch) que expõe getImei() para JS
 // Lê IMEI via TelephonyManager (Android 9 suporta sem restrição com READ_PHONE_STATE)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -367,18 +416,12 @@ public class BootReceiver extends BroadcastReceiver {
                 String imei   = DeviceIdentifier.readImei(appCtx);
                 double lat = 0, lng = 0;
                 boolean hasLoc = false;
-                if (ContextCompat.checkSelfPermission(appCtx, Manifest.permission.ACCESS_FINE_LOCATION)
-                        == PackageManager.PERMISSION_GRANTED) {
-                    LocationManager lm = (LocationManager) appCtx.getSystemService(Context.LOCATION_SERVICE);
-                    if (lm != null) {
-                        Location loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-                        if (loc == null) loc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
-                        if (loc == null) loc = lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER);
-                        // Só aceita se fresca (<2min) — evita coordenada obsoleta de sessão anterior
-                        if (loc != null && (System.currentTimeMillis() - loc.getTime()) < 2 * 60_000L) {
-                            lat = loc.getLatitude(); lng = loc.getLongitude(); hasLoc = true;
-                        }
-                    }
+                // Usa LocationStore (posicao ja validada) — no boot normalmente estara
+                // vazio ainda, o que e correto: melhor "sem localizacao" que um fix bruto
+                // nao validado (getLastKnownLocation direto pode ser A-GPS falso).
+                double[] vetted = LocationStore.getIfFresh(appCtx);
+                if (vetted != null) {
+                    lat = vetted[0]; lng = vetted[1]; hasLoc = true;
                 }
                 String now = isoNow();
                 String devBody = buildDeviceBody(serial, imei, "online", now, hasLoc, lat, lng);
@@ -413,7 +456,7 @@ public class BootReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.15\\"");
+        sb.append(",\\"app_version\\":\\"2.0.16\\"");
         sb.append("}");
         return sb.toString();
     }
@@ -550,18 +593,12 @@ public class ShutdownReceiver extends BroadcastReceiver {
         String imei   = DeviceIdentifier.readImei(context);
         String now    = isoNow();
 
-        // Captura última localização conhecida (não requer novo fix GPS)
+        // Captura última localização validada (mesma fonte que o GpsLocationService usa)
         double lat = 0, lng = 0;
         boolean hasLoc = false;
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED) {
-            LocationManager lm = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
-            if (lm != null) {
-                Location loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-                if (loc == null) loc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
-                if (loc == null) loc = lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER);
-                if (loc != null) { lat = loc.getLatitude(); lng = loc.getLongitude(); hasLoc = true; }
-            }
+        double[] vetted = LocationStore.getIfFresh(context);
+        if (vetted != null) {
+            lat = vetted[0]; lng = vetted[1]; hasLoc = true;
         }
 
         // 1. Upsert device (status=offline, com localização de desligamento)
@@ -594,7 +631,7 @@ public class ShutdownReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.15\\"");
+        sb.append(",\\"app_version\\":\\"2.0.16\\"");
         sb.append("}");
         return sb.toString();
     }
@@ -725,28 +762,15 @@ public class AlarmReceiver extends BroadcastReceiver {
         String imei   = DeviceIdentifier.readImei(context);
         String now    = isoNow();
 
-        // Tenta capturar última localização conhecida para atualizar last_lat/last_lng
+        // Usa a posicao ja validada pelo GpsLocationService (passou pelo filtro
+        // anti-ancora-envenenada com convergencia GPS + cross-validation NETWORK).
+        // NUNCA ler getLastKnownLocation() bruto aqui — isso ignora toda a
+        // validacao e deixa vazar fix A-GPS falso / torre celular pro dashboard.
         double lat = 0, lng = 0;
         boolean hasLoc = false;
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED) {
-            LocationManager lm = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
-            if (lm != null) {
-                Location gpsLoc  = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-                Location netLoc  = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
-                long nowMs = System.currentTimeMillis();
-                Location loc = null;
-                for (Location candidate : new Location[]{ gpsLoc, netLoc }) {
-                    if (candidate == null) continue;
-                    if ((nowMs - candidate.getTime()) > 2 * 60_000L) continue;
-                    if (!candidate.hasAccuracy() || candidate.getAccuracy() > 100f) continue;
-                    if (loc == null || candidate.getAccuracy() < loc.getAccuracy()) loc = candidate;
-                }
-                // Só usa se fresca (<2min) e precisa (<=100m) — evita coordenada obsoleta ou imprecisa
-                if (loc != null) {
-                    lat = loc.getLatitude(); lng = loc.getLongitude(); hasLoc = true;
-                }
-            }
+        double[] vetted = LocationStore.getIfFresh(context);
+        if (vetted != null) {
+            lat = vetted[0]; lng = vetted[1]; hasLoc = true;
         }
 
         // Envia ping com localização disponível
@@ -761,7 +785,7 @@ public class AlarmReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.15\\"");
+        sb.append(",\\"app_version\\":\\"2.0.16\\"");
         sb.append("}");
         postToSupabase(sb.toString());
 
@@ -1059,7 +1083,7 @@ public class GpsLocationService extends Service {
     private static final long   MIN_TIME_MS  = 30_000L;
     private static final long   NET_TIME_MS  = 15_000L; // NETWORK atualiza mais rapido
     private static final float  MIN_DIST_M   = 0f;
-    private static final String APP_VERSION  = "2.0.15";
+    private static final String APP_VERSION  = "2.0.16";
 
     private LocationManager  locationManager;
     private LocationListener locationListener;
@@ -1155,6 +1179,7 @@ public class GpsLocationService extends Service {
                             if (!isImpossibleJump(lastGps)) {
                                 lastKnownLocation = lastGps;
                                 lastSentTime = System.currentTimeMillis();
+                                LocationStore.save(getApplicationContext(), lastGps.getLatitude(), lastGps.getLongitude());
                                 new Thread(() -> sendToSupabase(lastGps)).start();
                             }
                         } else {
@@ -1195,6 +1220,7 @@ public class GpsLocationService extends Service {
                 if (isImpossibleJump(loc)) return;
                 lastKnownLocation = loc;
                 lastSentTime = System.currentTimeMillis();
+                LocationStore.save(getApplicationContext(), loc.getLatitude(), loc.getLongitude());
                 new Thread(() -> sendToSupabase(loc)).start();
             }
             @Override public void onStatusChanged(String p, int s, Bundle e) {}
@@ -1518,6 +1544,9 @@ public class GpsLocationService extends Service {
      */
     private boolean isImpossibleJump(Location newLoc) {
         if (lastKnownLocation == null) return false;
+        // Localizacao IP (fallback ip-api.com) nao e ancora confiavel de precisao
+        // Nao rejeitar GPS real baseado em posicao IP que pode estar km errada
+        if ("ip".equals(lastKnownLocation.getProvider())) return false;
         float dist    = newLoc.distanceTo(lastKnownLocation);
         long  elapsed = newLoc.getTime() - lastKnownLocation.getTime();
         if (elapsed <= 0) return false;
@@ -1728,6 +1757,7 @@ module.exports = function withBootReceiver(config) {
 
       const files = {
         'DeviceIdentifier.java'   : DEVICE_IDENTIFIER_JAVA,
+        'LocationStore.java'      : LOCATION_STORE_JAVA,
         'ImeiModule.java'         : IMEI_MODULE_JAVA,
         'ImeiPackage.java'        : IMEI_PACKAGE_JAVA,
         'BootReceiver.java'       : BOOT_RECEIVER_JAVA,
