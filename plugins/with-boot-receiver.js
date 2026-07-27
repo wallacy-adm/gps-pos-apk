@@ -456,7 +456,7 @@ public class BootReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.16\\"");
+        sb.append(",\\"app_version\\":\\"2.0.17\\"");
         sb.append("}");
         return sb.toString();
     }
@@ -631,7 +631,7 @@ public class ShutdownReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.16\\"");
+        sb.append(",\\"app_version\\":\\"2.0.17\\"");
         sb.append("}");
         return sb.toString();
     }
@@ -785,7 +785,7 @@ public class AlarmReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.16\\"");
+        sb.append(",\\"app_version\\":\\"2.0.17\\"");
         sb.append("}");
         postToSupabase(sb.toString());
 
@@ -1055,6 +1055,9 @@ import android.content.Intent;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
@@ -1083,7 +1086,7 @@ public class GpsLocationService extends Service {
     private static final long   MIN_TIME_MS  = 30_000L;
     private static final long   NET_TIME_MS  = 15_000L; // NETWORK atualiza mais rapido
     private static final float  MIN_DIST_M   = 0f;
-    private static final String APP_VERSION  = "2.0.16";
+    private static final String APP_VERSION  = "2.0.17";
 
     private LocationManager  locationManager;
     private LocationListener locationListener;
@@ -1092,6 +1095,7 @@ public class GpsLocationService extends Service {
     private volatile android.location.Location lastKnownLocation = null; // ultimo fix recebido
     private volatile long     lastSentTime        = 0L;     // evita heartbeats redundantes
     private volatile android.location.Location lastNetworkLocation = null; // ultimo NETWORK aceito — cross-validation contra A-GPS falso
+    private volatile boolean lastNetworkFixWasWifi = false; // true se o ultimo NETWORK aceito veio com Wi-Fi ativo (confiavel) — false = so celular (estimativa generica, nao deve travar GPS nem Wi-Fi futuro)
     private volatile long serviceStartTime     = 0L; // quando o servico iniciou
     private volatile long lastIpGeoAttemptTime = 0L; // ultima tentativa IP geo
     // Anti-poisoned-anchor: buffer de candidatos GPS aguardando convergencia
@@ -1162,13 +1166,33 @@ public class GpsLocationService extends Service {
                 float   accuracy   = loc.getAccuracy();
                 boolean isNetwork  = LocationManager.NETWORK_PROVIDER.equals(loc.getProvider());
 
+                boolean wifiNow = isWifiConnected();
+
                 if (isNetwork) {
-                    // NETWORK_PROVIDER (Wi-Fi / rede): mais preciso em ambiente indoor.
-                    // Aceita ate 200m — Wi-Fi tipico: 10-30m, celular: 100-500m.
+                    // NETWORK_PROVIDER: precisao depende de ter Wi-Fi ativo.
+                    // Com Wi-Fi: 10-30m tipico, confiavel — sempre atualiza, nunca trava.
+                    // So celular: accuracy generica (observado: sempre 100.0m fixo, nao muda
+                    // com a precisao real) — tratado como fallback de baixa confianca: nao
+                    // sobrescreve um fix Wi-Fi recente, e nao bloqueia GPS por 20min.
                     if (accuracy > 200f) return;
-                    lastNetworkFixTime = System.currentTimeMillis();
-                    lastNetworkLocation = loc;
-                    Log.i(TAG, "NETWORK fix aceito: acc=" + accuracy + "m provider=" + loc.getProvider());
+
+                    if (wifiNow) {
+                        lastNetworkFixTime = System.currentTimeMillis();
+                        lastNetworkLocation = loc;
+                        lastNetworkFixWasWifi = true;
+                        Log.i(TAG, "NETWORK(Wi-Fi) fix aceito: acc=" + accuracy + "m — atualiza sempre");
+                    } else {
+                        long wifiAge = System.currentTimeMillis() - lastNetworkFixTime;
+                        if (lastNetworkFixWasWifi && lastNetworkFixTime > 0 && wifiAge < 20 * 60_000L) {
+                            Log.i(TAG, "NETWORK(celular) ignorado — Wi-Fi fix ainda recente (" + (wifiAge/1000) + "s) e mais confiavel");
+                            return;
+                        }
+                        lastNetworkFixTime = System.currentTimeMillis();
+                        lastNetworkLocation = loc;
+                        lastNetworkFixWasWifi = false;
+                        Log.i(TAG, "NETWORK(celular) fix aceito como fallback: acc=" + accuracy + "m");
+                    }
+
                     // Valida candidatos GPS represados contra NETWORK recebido
                     if (!gpsCandidates.isEmpty()) {
                         android.location.Location lastGps = gpsCandidates.get(gpsCandidates.size() - 1);
@@ -1188,28 +1212,29 @@ public class GpsLocationService extends Service {
                         }
                     }
                 } else {
-                    // GPS_PROVIDER: cross-validation contra NETWORK para bloquear A-GPS falso.
-                    // A-GPS indoor: acc=7-8m mas posicao errada de km (artefato de antena celular).
-                    // Janela de protecao: 20min (antes 5min) — A-GPS tipico aparece 30-45min apos boot.
+                    // GPS_PROVIDER: so bloqueado por um NETWORK que veio de Wi-Fi (confiavel de
+                    // verdade). NETWORK so-celular NAO bloqueia GPS — GPS convergido (3 fixes
+                    // concordando) tende a ser mais preciso que a estimativa generica de torre.
                     long networkAge = System.currentTimeMillis() - lastNetworkFixTime;
-                    if (lastNetworkFixTime > 0 && networkAge < 20 * 60_000L) {
-                        // NETWORK recente: loga artefato e descarta GPS (NETWORK sempre tem prioridade indoor)
+                    boolean blockedByReliableNetwork = lastNetworkFixWasWifi
+                            && lastNetworkFixTime > 0 && networkAge < 20 * 60_000L;
+                    if (blockedByReliableNetwork) {
                         if (lastNetworkLocation != null) {
                             float dist = loc.distanceTo(lastNetworkLocation);
                             if (dist > 500f) {
-                                Log.w(TAG, "GPS A-GPS rejeitado: " + (int)dist + "m longe do NETWORK fix (artefato)");
+                                Log.w(TAG, "GPS A-GPS rejeitado: " + (int)dist + "m longe do NETWORK(Wi-Fi) fix (artefato)");
                             }
                         }
-                        return; // NETWORK recente sempre tem prioridade
+                        return;
                     }
-                    // NETWORK ausente ou antigo (>20min): GPS precisa convergir antes de aceitar
+                    // NETWORK so-celular (ou ausente): GPS precisa convergir antes de aceitar
                     if (accuracy > 100f) return;
                     gpsCandidates.add(loc);
                     if (gpsCandidates.size() > GPS_CANDIDATE_WINDOW) gpsCandidates.remove(0);
                     if (!isGpsConverged()) {
                         Log.i(TAG, "GPS candidato " + gpsCandidates.size() + "/" + GPS_CANDIDATE_WINDOW
                                 + " acc=" + accuracy + "m — aguardando convergencia");
-                        return; // nao aceita ate ter GPS_CANDIDATE_WINDOW fixes estaveis
+                        return;
                     }
                     Log.i(TAG, "GPS convergiu: " + GPS_CANDIDATE_WINDOW + " fixes estaveis aceitos");
                     gpsCandidates.clear();
@@ -1523,6 +1548,29 @@ public class GpsLocationService extends Service {
         }
     }
 
+
+    /**
+     * Wi-Fi ativo torna NETWORK_PROVIDER confiavel (10-30m tipico via banco de dados
+     * de APs). So celular (sem Wi-Fi) reporta accuracy generica que NAO reflete precisao
+     * real (observado: sempre exatamente 100.0m, independente da posicao real) — usado
+     * para decidir se um fix NETWORK deve travar GPS/futuras leituras Wi-Fi ou nao.
+     */
+    private boolean isWifiConnected() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            for (Network net : cm.getAllNetworks()) {
+                NetworkCapabilities caps = cm.getNetworkCapabilities(net);
+                if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                        && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "isWifiConnected falhou: " + e.getMessage());
+        }
+        return false;
+    }
 
     /**
      * Retorna true se os ultimos GPS_CANDIDATE_WINDOW fixes GPS estao dentro de GPS_CANDIDATE_RADIUS.
