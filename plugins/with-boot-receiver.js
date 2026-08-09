@@ -456,7 +456,7 @@ public class BootReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.17\\"");
+        sb.append(",\\"app_version\\":\\"2.0.18\\"");
         sb.append("}");
         return sb.toString();
     }
@@ -631,7 +631,7 @@ public class ShutdownReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.17\\"");
+        sb.append(",\\"app_version\\":\\"2.0.18\\"");
         sb.append("}");
         return sb.toString();
     }
@@ -785,7 +785,7 @@ public class AlarmReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.17\\"");
+        sb.append(",\\"app_version\\":\\"2.0.18\\"");
         sb.append("}");
         postToSupabase(sb.toString());
 
@@ -1065,6 +1065,14 @@ import android.Manifest;
 import android.content.pm.PackageManager;
 import android.os.IBinder;
 import android.util.Log;
+import android.telephony.TelephonyManager;
+import android.telephony.CellInfo;
+import android.telephony.CellInfoLte;
+import android.telephony.CellInfoGsm;
+import android.telephony.CellInfoWcdma;
+import android.telephony.CellIdentityLte;
+import android.telephony.CellIdentityGsm;
+import android.telephony.CellIdentityWcdma;
 import androidx.core.content.ContextCompat;
 
 import java.io.OutputStream;
@@ -1073,6 +1081,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
 
@@ -1086,7 +1095,10 @@ public class GpsLocationService extends Service {
     private static final long   MIN_TIME_MS  = 30_000L;
     private static final long   NET_TIME_MS  = 15_000L; // NETWORK atualiza mais rapido
     private static final float  MIN_DIST_M   = 0f;
-    private static final String APP_VERSION  = "2.0.17";
+    private static final String APP_VERSION  = "2.0.18";
+    // Chave gratuita OpenCelliD (opencellid.org) — fallback via torre celular,
+    // independente do motor de posicao do chip (GPS/NLP), usa so o radio.
+    private static final String OPENCELLID_API_KEY = "PENDENTE_CHAVE_WALLACY";
 
     private LocationManager  locationManager;
     private LocationListener locationListener;
@@ -1098,6 +1110,7 @@ public class GpsLocationService extends Service {
     private volatile boolean lastNetworkFixWasWifi = false; // true se o ultimo NETWORK aceito veio com Wi-Fi ativo (confiavel) — false = so celular (estimativa generica, nao deve travar GPS nem Wi-Fi futuro)
     private volatile long serviceStartTime     = 0L; // quando o servico iniciou
     private volatile long lastIpGeoAttemptTime = 0L; // ultima tentativa IP geo
+    private volatile long lastCellTowerAttemptTime = 0L; // ultima tentativa torre celular (OpenCelliD)
     // Anti-poisoned-anchor: buffer de candidatos GPS aguardando convergencia
     private final java.util.List<android.location.Location> gpsCandidates =
         new java.util.ArrayList<>();
@@ -1301,7 +1314,8 @@ public class GpsLocationService extends Service {
                     new Thread(() -> sendToSupabase(loc)).start();
                 } else {
                     Log.i(TAG, "Heartbeat: sem fix ainda, enviando keepalive");
-                    maybeRunIpGeolocationFallback();
+                    maybeRunCellTowerFallback(); // torre celular primeiro — mais preciso, gratis
+                    maybeRunIpGeolocationFallback(); // so age se torre celular nao resolveu
                     new Thread(this::sendKeepalive).start();
                 }
             }
@@ -1356,28 +1370,13 @@ public class GpsLocationService extends Service {
                 String imei = DeviceIdentifier.readImei(getApplicationContext());
                 String now  = isoNow(System.currentTimeMillis());
 
-                // Só usa lastKnownLocation se for fresca (<2min) e precisa (<=100m) — evita enviar
-                // coordenada obsoleta ou imprecisa de sessão anterior ao Supabase
+                // Usa a posicao ja validada (LocationStore) — nunca le getLastKnownLocation
+                // bruto, evita vazar fix nao validado no heartbeat inicial de boot.
                 double lat = 0; double lng = 0; boolean hasLoc = false;
                 try {
-                    if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
-                            == PackageManager.PERMISSION_GRANTED) {
-                        LocationManager lm = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
-                        if (lm != null) {
-                            Location gpsLoc  = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-                            Location netLoc  = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
-                            long now2 = System.currentTimeMillis();
-                            Location loc = null;
-                            for (Location candidate : new Location[]{ gpsLoc, netLoc }) {
-                                if (candidate == null) continue;
-                                if ((now2 - candidate.getTime()) > 2 * 60_000L) continue;
-                                if (!candidate.hasAccuracy() || candidate.getAccuracy() > 100f) continue;
-                                if (loc == null || candidate.getAccuracy() < loc.getAccuracy()) loc = candidate;
-                            }
-                            if (loc != null) {
-                                lat = loc.getLatitude(); lng = loc.getLongitude(); hasLoc = true;
-                            }
-                        }
+                    double[] vetted = LocationStore.getIfFresh(getApplicationContext());
+                    if (vetted != null) {
+                        lat = vetted[0]; lng = vetted[1]; hasLoc = true;
                     }
                 } catch (Exception ignored) {}
 
@@ -1608,7 +1607,109 @@ public class GpsLocationService extends Service {
     }
 
     /**
+     * Fallback via torre celular — usa TelephonyManager (camada de radio/modem,
+     * INDEPENDENTE do motor de posicao do chip GPS/NLP que pode estar com erro,
+     * como confirmado no CIE2020: IzatSvc trava internamente e nunca calcula
+     * posicao real). Consulta banco de dados gratuito OpenCelliD com os dados
+     * da torre servindo no momento. Precisao tipica: 200m-2km — muito melhor
+     * que geolocalizacao por IP (pode errar dezenas/centenas de km).
+     * Disparado apos 15min sem fix aceito, renovado a cada 1h. Roda ANTES do
+     * fallback de IP — so cai para IP se a torre celular tambem falhar.
+     */
+    private void maybeRunCellTowerFallback() {
+        long now = System.currentTimeMillis();
+        if ((now - serviceStartTime) < 15 * 60_000L) return;
+        if ((now - lastCellTowerAttemptTime) < 60 * 60_000L) return;
+        if (OPENCELLID_API_KEY == null || OPENCELLID_API_KEY.startsWith("PENDENTE")) return;
+        lastCellTowerAttemptTime = now;
+
+        new Thread(() -> {
+            HttpURLConnection conn = null;
+            try {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                        != PackageManager.PERMISSION_GRANTED) return;
+
+                TelephonyManager tm = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
+                if (tm == null) return;
+                List<CellInfo> cells = tm.getAllCellInfo();
+                if (cells == null) return;
+
+                int mcc = -1, mnc = -1, lac = -1, cellId = -1;
+                String radio = null;
+
+                for (CellInfo ci : cells) {
+                    if (!ci.isRegistered()) continue;
+                    if (ci instanceof CellInfoLte) {
+                        CellIdentityLte id = ((CellInfoLte) ci).getCellIdentity();
+                        mcc = id.getMcc(); mnc = id.getMnc(); lac = id.getTac(); cellId = id.getCi();
+                        radio = "lte"; break;
+                    } else if (ci instanceof CellInfoWcdma) {
+                        CellIdentityWcdma id = ((CellInfoWcdma) ci).getCellIdentity();
+                        mcc = id.getMcc(); mnc = id.getMnc(); lac = id.getLac(); cellId = id.getCid();
+                        radio = "wcdma"; break;
+                    } else if (ci instanceof CellInfoGsm) {
+                        CellIdentityGsm id = ((CellInfoGsm) ci).getCellIdentity();
+                        mcc = id.getMcc(); mnc = id.getMnc(); lac = id.getLac(); cellId = id.getCid();
+                        radio = "gsm"; break;
+                    }
+                }
+
+                if (mcc <= 0 || cellId <= 0 || radio == null) {
+                    Log.w(TAG, "CellTower fallback: sem dado de torre servindo disponivel");
+                    return;
+                }
+
+                String url = "https://opencellid.org/cell/get?key=" + OPENCELLID_API_KEY
+                    + "&mcc=" + mcc + "&mnc=" + mnc + "&lac=" + lac + "&cellid=" + cellId
+                    + "&radio=" + radio + "&format=json";
+
+                conn = (HttpURLConnection) new URL(url).openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(6000);
+                conn.setReadTimeout(6000);
+                if (conn.getResponseCode() != 200) {
+                    Log.w(TAG, "CellTower fallback HTTP " + conn.getResponseCode());
+                    return;
+                }
+                java.io.InputStream is = conn.getInputStream();
+                byte[] buf = new byte[512];
+                StringBuilder sb = new StringBuilder();
+                int n;
+                while ((n = is.read(buf)) != -1)
+                    sb.append(new String(buf, 0, n, StandardCharsets.UTF_8));
+                String resp = sb.toString();
+
+                double lat = extractJsonDouble(resp, "lat");
+                double lon = extractJsonDouble(resp, "lon");
+                double range = extractJsonDouble(resp, "range");
+                if (lat == 0.0 && lon == 0.0) {
+                    Log.w(TAG, "CellTower fallback: torre nao encontrada na base OpenCelliD");
+                    return;
+                }
+
+                float accuracy = range > 0 ? (float) range : 2000f;
+                Log.i(TAG, "CellTower fallback OK: " + lat + "," + lon + " acc=" + accuracy + "m radio=" + radio);
+
+                Location cellLoc = new Location("celltower");
+                cellLoc.setLatitude(lat);
+                cellLoc.setLongitude(lon);
+                cellLoc.setAccuracy(accuracy);
+                cellLoc.setTime(System.currentTimeMillis());
+                lastKnownLocation = cellLoc;
+                lastSentTime = System.currentTimeMillis();
+                LocationStore.save(getApplicationContext(), lat, lon);
+                new Thread(() -> sendToSupabase(cellLoc)).start();
+            } catch (Exception e) {
+                Log.w(TAG, "CellTower fallback erro: " + e.getMessage());
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }).start();
+    }
+
+    /**
      * Fallback de ultimo recurso: IP geolocation para devices sem GPS funcional (ex: CIE2020).
+     * So roda se o fallback de torre celular (mais preciso) nao resolveu recentemente.
      * Disparado apos 15min sem fix aceito, renovado a cada 1h.
      * accuracy=50000f (50km) marca como aproximado no dashboard.
      */
@@ -1616,6 +1717,9 @@ public class GpsLocationService extends Service {
         long now = System.currentTimeMillis();
         if ((now - serviceStartTime)     < 15 * 60_000L) return;
         if ((now - lastIpGeoAttemptTime) < 60 * 60_000L) return;
+        // Ja temos uma posicao recente (de qualquer fonte, incl. torre celular)? Nao precisa de IP.
+        if (lastKnownLocation != null
+                && (now - lastKnownLocation.getTime()) < 20 * 60_000L) return;
         lastIpGeoAttemptTime = now;
         new Thread(() -> {
             java.net.HttpURLConnection conn = null;
