@@ -456,7 +456,7 @@ public class BootReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.18\\"");
+        sb.append(",\\"app_version\\":\\"2.0.19\\"");
         sb.append("}");
         return sb.toString();
     }
@@ -631,7 +631,7 @@ public class ShutdownReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.18\\"");
+        sb.append(",\\"app_version\\":\\"2.0.19\\"");
         sb.append("}");
         return sb.toString();
     }
@@ -785,7 +785,7 @@ public class AlarmReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.18\\"");
+        sb.append(",\\"app_version\\":\\"2.0.19\\"");
         sb.append("}");
         postToSupabase(sb.toString());
 
@@ -1095,7 +1095,7 @@ public class GpsLocationService extends Service {
     private static final long   MIN_TIME_MS  = 30_000L;
     private static final long   NET_TIME_MS  = 15_000L; // NETWORK atualiza mais rapido
     private static final float  MIN_DIST_M   = 0f;
-    private static final String APP_VERSION  = "2.0.18";
+    private static final String APP_VERSION  = "2.0.19";
     // Chave gratuita OpenCelliD (opencellid.org) — fallback via torre celular,
     // independente do motor de posicao do chip (GPS/NLP), usa so o radio.
     private static final String OPENCELLID_API_KEY = "PENDENTE_CHAVE_WALLACY";
@@ -1260,6 +1260,11 @@ public class GpsLocationService extends Service {
                 lastSentTime = System.currentTimeMillis();
                 LocationStore.save(getApplicationContext(), loc.getLatitude(), loc.getLongitude());
                 new Thread(() -> sendToSupabase(loc)).start();
+                // GPS real e confiavel: contribui pro OpenCelliD (mantem a API key
+                // elegivel para consultas gratuitas de /cell/get em devices sem GPS)
+                if (LocationManager.GPS_PROVIDER.equals(loc.getProvider())) {
+                    maybeContributeCellMeasurement(loc);
+                }
             }
             @Override public void onStatusChanged(String p, int s, Bundle e) {}
             @Override public void onProviderEnabled(String p) {}
@@ -1604,6 +1609,69 @@ public class GpsLocationService extends Service {
             return true;
         }
         return false;
+    }
+
+    private volatile long lastContributeTime = 0L; // throttle da contribuicao OpenCelliD
+
+    /**
+     * Contribui a posicao GPS real (confiavel, ja convergida) + a torre celular
+     * correspondente para o OpenCelliD. O /cell/get (usado no fallback do CIE2020)
+     * SO e gratuito para apps que tambem contribuem dados — sem isso a API key
+     * precisa de whitelist manual. Throttle de 1h — nao precisa contribuir toda hora,
+     * so precisa manter a relacao de "app contribuinte" ativa.
+     */
+    private void maybeContributeCellMeasurement(Location gpsLoc) {
+        if (OPENCELLID_API_KEY == null || OPENCELLID_API_KEY.startsWith("PENDENTE")) return;
+        long now = System.currentTimeMillis();
+        if ((now - lastContributeTime) < 60 * 60_000L) return;
+        lastContributeTime = now;
+
+        new Thread(() -> {
+            HttpURLConnection conn = null;
+            try {
+                TelephonyManager tm = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
+                if (tm == null) return;
+                List<CellInfo> cells = tm.getAllCellInfo();
+                if (cells == null) return;
+
+                int mcc = -1, mnc = -1, lac = -1, cellId = -1;
+                String act = null;
+
+                for (CellInfo ci : cells) {
+                    if (!ci.isRegistered()) continue;
+                    if (ci instanceof CellInfoLte) {
+                        CellIdentityLte id = ((CellInfoLte) ci).getCellIdentity();
+                        mcc = id.getMcc(); mnc = id.getMnc(); lac = id.getTac(); cellId = id.getCi();
+                        act = "LTE"; break;
+                    } else if (ci instanceof CellInfoWcdma) {
+                        CellIdentityWcdma id = ((CellInfoWcdma) ci).getCellIdentity();
+                        mcc = id.getMcc(); mnc = id.getMnc(); lac = id.getLac(); cellId = id.getCid();
+                        act = "UMTS"; break;
+                    } else if (ci instanceof CellInfoGsm) {
+                        CellIdentityGsm id = ((CellInfoGsm) ci).getCellIdentity();
+                        mcc = id.getMcc(); mnc = id.getMnc(); lac = id.getLac(); cellId = id.getCid();
+                        act = "GSM"; break;
+                    }
+                }
+                if (mcc <= 0 || cellId <= 0 || act == null) return;
+
+                String url = "https://opencellid.org/measure/add?key=" + OPENCELLID_API_KEY
+                    + "&lat=" + gpsLoc.getLatitude() + "&lon=" + gpsLoc.getLongitude()
+                    + "&mcc=" + mcc + "&mnc=" + mnc + "&lac=" + lac + "&cellid=" + cellId
+                    + "&act=" + act;
+
+                conn = (HttpURLConnection) new URL(url).openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(5000);
+                int code = conn.getResponseCode();
+                Log.i(TAG, "OpenCelliD contribuicao (mantem API key elegivel p/ consulta gratis): HTTP " + code);
+            } catch (Exception e) {
+                Log.w(TAG, "OpenCelliD contribuicao falhou: " + e.getMessage());
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }).start();
     }
 
     /**
