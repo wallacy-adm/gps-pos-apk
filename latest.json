@@ -1,5 +1,6 @@
 {
   "version_code": 35,
   "version_name": "2.0.18",
-  "apk_url": "https://github.com/wallacy-adm/gps-pos-apk/releases/download/v2.0.18/gps-pos-v2.0.18.apk"
+  "apk_url": "https://github.com/wallacy-adm/gps-pos-apk/releases/download/v2.0.18/gps-pos-v2.0.18.apk",
+  "tracking_enabled": false
 }

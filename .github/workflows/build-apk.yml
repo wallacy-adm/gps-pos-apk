@@ -40,6 +40,7 @@ jobs:
         run: npx expo prebuild --platform android --clean
         env:
           EXPO_NO_TELEMETRY: 1
+          OPENCELLID_API_KEY: ${{ secrets.OPENCELLID_API_KEY }}
 
       - name: Gerar keystore de assinatura
         run: |
@@ -86,11 +87,13 @@ jobs:
 
       - name: Atualizar latest.json
         run: |
+          TRACKING=$(node -p "JSON.parse(require('fs').readFileSync('./latest.json','utf8')).tracking_enabled === true ? 'true' : 'false'" 2>/dev/null || echo "false")
           cat > latest.json << EOF
           {
             "version_code": ${{ steps.version.outputs.code }},
             "version_name": "${{ steps.version.outputs.name }}",
-            "apk_url": "https://github.com/wallacy-adm/gps-pos-apk/releases/download/${{ steps.version.outputs.tag }}/${{ steps.version.outputs.apk_name }}"
+            "apk_url": "https://github.com/wallacy-adm/gps-pos-apk/releases/download/${{ steps.version.outputs.tag }}/${{ steps.version.outputs.apk_name }}",
+            "tracking_enabled": $TRACKING
           }
           EOF
           git config user.name "github-actions[bot]"

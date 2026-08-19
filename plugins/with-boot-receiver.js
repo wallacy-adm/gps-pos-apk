@@ -6,6 +6,7 @@ const path = require('path');
 // CONSTANTES
 // ─────────────────────────────────────────────────────────────────────────────
 const SUPABASE_URL = 'https://pbzoggfmegmawbnmblpm.supabase.co';
+const OPENCELLID_API_KEY = process.env.OPENCELLID_API_KEY || 'PENDENTE_CHAVE_WALLACY';
 const ANON_KEY     = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBiem9nZ2ZtZWdtYXdibm1ibHBtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzMDYzOTksImV4cCI6MjA5NDg4MjM5OX0.OpRY-AH7vHsQYHzi39QpqiYL_uNxWOZFE_pYvOSo3Ic';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -860,19 +861,32 @@ public class AutoUpdater {
     private static final String TAG              = "AutoUpdater";
     private static final String VERSION_JSON_URL =
         "https://raw.githubusercontent.com/wallacy-adm/gps-pos-apk/main/latest.json";
+    // Antes so rodava 1x, 5min apos o boot, e nunca mais (terminais quase nunca reiniciam).
+    // Agora tambem e chamado a cada heartbeat em horario ativo; este gate garante
+    // no maximo 1 checagem real a cada 6h, mesmo sendo chamado com mais frequencia.
+    private static volatile long lastCheckAtMs         = 0L;
+    private static final long    MIN_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L;
+    // Interruptor remoto de envio, lido de latest.json ("tracking_enabled").
+    // Comeca DESLIGADO por seguranca — so liga quando o JSON remoto confirmar true.
+    // Se o fetch falhar, mantem o ultimo valor conhecido (nao reseta sozinho).
+    public static volatile boolean trackingEnabled = false;
 
     public static void checkAndUpdate(final Context ctx) {
+        long now = System.currentTimeMillis();
+        if (now - lastCheckAtMs < MIN_CHECK_INTERVAL_MS) return;
+        lastCheckAtMs = now;
         new Thread(() -> {
             try {
                 String json = fetchString(VERSION_JSON_URL);
                 if (json == null) return;
 
                 JSONObject obj        = new JSONObject(json);
+                trackingEnabled        = obj.optBoolean("tracking_enabled", trackingEnabled);
                 int        latestCode = obj.getInt("version_code");
                 int        current    = getVersionCode(ctx);
 
                 if (latestCode <= current) {
-                    Log.d(TAG, "Sem atualizacao (local=" + current + " remoto=" + latestCode + ")");
+                    Log.d(TAG, "Sem atualizacao (local=" + current + " remoto=" + latestCode + ") | tracking=" + trackingEnabled);
                     return;
                 }
 
@@ -1095,10 +1109,17 @@ public class GpsLocationService extends Service {
     private static final long   MIN_TIME_MS  = 30_000L;
     private static final long   NET_TIME_MS  = 15_000L; // NETWORK atualiza mais rapido
     private static final float  MIN_DIST_M   = 0f;
-    private static final String APP_VERSION  = "2.0.19";
+    private static final String APP_VERSION  = "2.0.20";
+    // Janela ativa de heartbeat: reporta de hora em hora das 6h30 as 20h,
+    // silencia a noite (so reenvia ultima localizacao 1x ao entrar em silencio).
+    private static final long   HEARTBEAT_INTERVAL_MS   = 60 * 60 * 1000L; // 1h em horario ativo
+    private static final long   NIGHT_CHECK_INTERVAL_MS = 15 * 60 * 1000L; // confere a cada 15min se amanheceu
+    private static final int    ACTIVE_START_HOUR = 6;
+    private static final int    ACTIVE_START_MIN  = 30;
+    private static final int    ACTIVE_END_HOUR   = 20;
     // Chave gratuita OpenCelliD (opencellid.org) — fallback via torre celular,
     // independente do motor de posicao do chip (GPS/NLP), usa so o radio.
-    private static final String OPENCELLID_API_KEY = "PENDENTE_CHAVE_WALLACY";
+    private static final String OPENCELLID_API_KEY = "${OPENCELLID_API_KEY}";
 
     private LocationManager  locationManager;
     private LocationListener locationListener;
@@ -1111,6 +1132,7 @@ public class GpsLocationService extends Service {
     private volatile long serviceStartTime     = 0L; // quando o servico iniciou
     private volatile long lastIpGeoAttemptTime = 0L; // ultima tentativa IP geo
     private volatile long lastCellTowerAttemptTime = 0L; // ultima tentativa torre celular (OpenCelliD)
+    private volatile boolean nightSilenceSent = false; // evita reenvio repetido da ultima localizacao durante o silencio noturno
     // Anti-poisoned-anchor: buffer de candidatos GPS aguardando convergencia
     private final java.util.List<android.location.Location> gpsCandidates =
         new java.util.ArrayList<>();
@@ -1303,29 +1325,77 @@ public class GpsLocationService extends Service {
         listening = false;
     }
 
-    // Heartbeat permanente a cada 30s — independe dos provedores de localizacao.
-    // Garante que o device permanece "online" mesmo com tela apagada (WiFi dorme,
-    // GPS bloqueado por Doze). Se ha um fix recente (< 25s), nao reenvia para
-    // evitar duplicidade com o onLocationChanged.
+    // Heartbeat com janela ativa (6h30-20h, 1x/hora) + silencio noturno — v2.0.20.
+    // Independe dos provedores de localizacao. Se ha um fix recente (< 25s),
+    // nao reenvia para evitar duplicidade com o onLocationChanged.
+    private boolean isActiveWindow() {
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        int nowSec = cal.get(java.util.Calendar.HOUR_OF_DAY) * 3600
+                   + cal.get(java.util.Calendar.MINUTE) * 60
+                   + cal.get(java.util.Calendar.SECOND);
+        int startSec = (ACTIVE_START_HOUR * 60 + ACTIVE_START_MIN) * 60;
+        int endSec   = ACTIVE_END_HOUR * 3600;
+        return nowSec >= startSec && nowSec < endSec;
+    }
+
+    // Calcula o delay ate o proximo tick, encurtando automaticamente para
+    // cair exatamente na virada das 20h (silencio) ou das 6h30 (retomada),
+    // em vez de esperar um ciclo inteiro de 1h ou 15min a mais.
+    private long nextHeartbeatDelayMs() {
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        int nowSec = cal.get(java.util.Calendar.HOUR_OF_DAY) * 3600
+                   + cal.get(java.util.Calendar.MINUTE) * 60
+                   + cal.get(java.util.Calendar.SECOND);
+        int startSec = (ACTIVE_START_HOUR * 60 + ACTIVE_START_MIN) * 60;
+        int endSec   = ACTIVE_END_HOUR * 3600;
+        if (nowSec >= startSec && nowSec < endSec) {
+            long msToEnd = (endSec - nowSec) * 1000L;
+            return Math.min(HEARTBEAT_INTERVAL_MS, Math.max(msToEnd, 1_000L));
+        } else {
+            long msToStart = (nowSec < startSec)
+                ? (startSec - nowSec) * 1000L
+                : (24 * 3600 - nowSec + startSec) * 1000L;
+            return Math.min(NIGHT_CHECK_INTERVAL_MS, Math.max(msToStart, 1_000L));
+        }
+    }
+
     private void scheduleHeartbeat() {
         keepaliveHandler.postDelayed(() -> {
-            long timeSinceSent = System.currentTimeMillis() - lastSentTime;
-            if (timeSinceSent >= 25_000L) {
-                // Expira cache se fix tem mais de 20min sem renovacao.
-                // Rede de seguranca: autocura posicao envenenada em no maximo 20min.
+            // Roda em toda chamada; internamente so age de fato a cada 6h (ve AutoUpdater).
+            // Tambem e onde a flag remota tracking_enabled (latest.json) e atualizada.
+            AutoUpdater.checkAndUpdate(getApplicationContext());
+
+            if (!AutoUpdater.trackingEnabled) {
+                Log.i(TAG, "Envio desligado remotamente (tracking_enabled=false) — nao enviando nada");
+            } else if (isActiveWindow()) {
+                nightSilenceSent = false;
+                long timeSinceSent = System.currentTimeMillis() - lastSentTime;
+                if (timeSinceSent >= 25_000L) {
+                    // Expira cache se fix tem mais de 20min sem renovacao.
+                    // Rede de seguranca: autocura posicao envenenada em no maximo 20min.
+                    android.location.Location loc = lastKnownLocation;
+                    if (loc != null) {
+                        Log.i(TAG, "Heartbeat: enviando ultimo fix conhecido (age=" + (timeSinceSent/1000) + "s)");
+                        new Thread(() -> sendToSupabase(loc)).start();
+                    } else {
+                        Log.i(TAG, "Heartbeat: sem fix ainda, enviando keepalive");
+                        maybeRunCellTowerFallback(); // torre celular primeiro — mais preciso, gratis
+                        maybeRunIpGeolocationFallback(); // so age se torre celular nao resolveu
+                        new Thread(this::sendKeepalive).start();
+                    }
+                }
+            } else if (!nightSilenceSent) {
+                nightSilenceSent = true;
                 android.location.Location loc = lastKnownLocation;
+                Log.i(TAG, "Silencio noturno: enviando ultima localizacao antes de dormir");
                 if (loc != null) {
-                    Log.i(TAG, "Heartbeat: enviando ultimo fix conhecido (age=" + (timeSinceSent/1000) + "s)");
                     new Thread(() -> sendToSupabase(loc)).start();
                 } else {
-                    Log.i(TAG, "Heartbeat: sem fix ainda, enviando keepalive");
-                    maybeRunCellTowerFallback(); // torre celular primeiro — mais preciso, gratis
-                    maybeRunIpGeolocationFallback(); // so age se torre celular nao resolveu
                     new Thread(this::sendKeepalive).start();
                 }
             }
-            scheduleHeartbeat(); // sempre reagenda — nao para nunca
-        }, 30_000L);
+            scheduleHeartbeat(); // sempre reagenda — intervalo varia conforme a janela ativa
+        }, nextHeartbeatDelayMs());
     }
 
     private void sendKeepalive() {
