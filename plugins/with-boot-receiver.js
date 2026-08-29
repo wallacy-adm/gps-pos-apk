@@ -5,9 +5,9 @@ const path = require('path');
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES
 // ─────────────────────────────────────────────────────────────────────────────
-const SUPABASE_URL = 'https://pbzoggfmegmawbnmblpm.supabase.co';
+const SUPABASE_URL = 'https://kyxowmjriiqzjacwltja.supabase.co';
 const OPENCELLID_API_KEY = process.env.OPENCELLID_API_KEY || 'PENDENTE_CHAVE_WALLACY';
-const ANON_KEY     = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBiem9nZ2ZtZWdtYXdibm1ibHBtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzMDYzOTksImV4cCI6MjA5NDg4MjM5OX0.OpRY-AH7vHsQYHzi39QpqiYL_uNxWOZFE_pYvOSo3Ic';
+const ANON_KEY     = 'sb_publishable_exjFNbQhdCW6RDBBZKyqHg_Un3HiFhr';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DeviceIdentifier — única fonte de verdade para serial e IMEI
