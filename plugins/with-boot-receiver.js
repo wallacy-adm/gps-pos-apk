@@ -1014,6 +1014,41 @@ public class InstallReceiver extends BroadcastReceiver {
 `;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DeviceOwnerReceiver — boilerplate minimo exigido pelo Android para o app
+// poder virar Device Owner via `dpm set-device-owner` (comando ADB, uma vez
+// por terminal, aparelho sem conta Google ainda). NAO ativa nada sozinho —
+// so torna o app elegivel. A logica de instalacao silenciosa em si (fase 2,
+// ainda nao implementada) so deve ser escrita depois de confirmar em campo
+// como o Android se comporta com Device Owner ativo neste app.
+// ─────────────────────────────────────────────────────────────────────────────
+const DEVICE_OWNER_RECEIVER_JAVA = `package com.system.posservice;
+
+import android.app.admin.DeviceAdminReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.util.Log;
+
+public class DeviceOwnerReceiver extends DeviceAdminReceiver {
+    private static final String TAG = "DeviceOwnerReceiver";
+
+    @Override
+    public void onEnabled(Context context, Intent intent) {
+        super.onEnabled(context, intent);
+        Log.i(TAG, "Device Admin habilitado");
+    }
+}
+`;
+
+const DEVICE_OWNER_XML = `<?xml version="1.0" encoding="utf-8"?>
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <!-- Nenhuma politica classica de admin (wipe/senha) e pedida aqui —
+             so a elegibilidade para status de Device Owner. -->
+    </uses-policies>
+</device-admin>
+`;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // AlarmScheduler — utilitário para agendar alarme de backup
 // ─────────────────────────────────────────────────────────────────────────────
 const ALARM_SCHEDULER_JAVA = `package com.system.posservice;
@@ -1993,6 +2028,28 @@ module.exports = function withBootReceiver(config) {
       });
     }
 
+    // DeviceOwnerReceiver: obrigatorio para o app poder virar Device Owner via
+    // `dpm set-device-owner`. Nao ativa nada sozinho — so torna o app elegivel.
+    // exported=true + permission BIND_DEVICE_ADMIN sao exigidos pelo Android.
+    if (!hasReceiver('.DeviceOwnerReceiver')) {
+      app.receiver.push({
+        $: {
+          'android:name': '.DeviceOwnerReceiver',
+          'android:permission': 'android.permission.BIND_DEVICE_ADMIN',
+          'android:exported': 'true',
+        },
+        'meta-data': [{
+          $: {
+            'android:name': 'android.app.device_admin',
+            'android:resource': '@xml/device_owner_receiver',
+          },
+        }],
+        'intent-filter': [{ action: [
+          { $: { 'android:name': 'android.app.action.DEVICE_ADMIN_ENABLED' } },
+        ]}],
+      });
+    }
+
     const perms = manifest['uses-permission'] ?? [];
 
     const addPerm = (name) => {
@@ -2057,12 +2114,27 @@ module.exports = function withBootReceiver(config) {
         'GpsLocationService.java' : GPS_LOCATION_SERVICE_JAVA,
         'AutoUpdater.java'        : AUTO_UPDATER_JAVA,
         'InstallReceiver.java'    : INSTALL_RECEIVER_JAVA,
+        'DeviceOwnerReceiver.java': DEVICE_OWNER_RECEIVER_JAVA,
         // GpsRestartService.java removido: substituido por GpsLocationService
       };
 
       for (const [fileName, content] of Object.entries(files)) {
         await fs.promises.writeFile(path.join(packageDir, fileName), content, 'utf8');
       }
+
+      // Recurso XML obrigatorio para o DeviceAdminReceiver (declarado no Manifest).
+      // uses-policies vazio: nao pedimos politicas classicas de admin (wipe/senha),
+      // so a elegibilidade para virar Device Owner via `dpm set-device-owner`.
+      const xmlDir = path.join(
+        androidConfig.modRequest.platformProjectRoot,
+        'app', 'src', 'main', 'res', 'xml'
+      );
+      await fs.promises.mkdir(xmlDir, { recursive: true });
+      await fs.promises.writeFile(
+        path.join(xmlDir, 'device_owner_receiver.xml'),
+        DEVICE_OWNER_XML,
+        'utf8'
+      );
 
       return androidConfig;
     },
