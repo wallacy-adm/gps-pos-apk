@@ -2,6 +2,11 @@ const { withAndroidManifest, withDangerousMod, withMainApplication } = require('
 const fs = require('fs');
 const path = require('path');
 
+// Versao unica, lida do app.json — evita o bug de versao hardcoded
+// divergente que existia antes (3 lugares diziam "2.0.19", outro "2.0.20",
+// nenhum batia com a versao real). Agora todo lugar usa essa constante.
+const APP_VERSION_STRING = require('../app.json').expo.version;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CONSTANTES
 // ─────────────────────────────────────────────────────────────────────────────
@@ -457,7 +462,7 @@ public class BootReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.19\\"");
+        sb.append(",\\"app_version\\":\\"${APP_VERSION_STRING}\\"");
         sb.append("}");
         return sb.toString();
     }
@@ -632,7 +637,7 @@ public class ShutdownReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.19\\"");
+        sb.append(",\\"app_version\\":\\"${APP_VERSION_STRING}\\"");
         sb.append("}");
         return sb.toString();
     }
@@ -786,7 +791,7 @@ public class AlarmReceiver extends BroadcastReceiver {
         if (imei != null && !imei.isEmpty()) {
             sb.append(",\\"imei\\":\\"").append(imei).append("\\"");
         }
-        sb.append(",\\"app_version\\":\\"2.0.19\\"");
+        sb.append(",\\"app_version\\":\\"${APP_VERSION_STRING}\\"");
         sb.append("}");
         postToSupabase(sb.toString());
 
@@ -1144,7 +1149,7 @@ public class GpsLocationService extends Service {
     private static final long   MIN_TIME_MS  = 30_000L;
     private static final long   NET_TIME_MS  = 15_000L; // NETWORK atualiza mais rapido
     private static final float  MIN_DIST_M   = 0f;
-    private static final String APP_VERSION  = "2.0.20";
+    private static final String APP_VERSION  = "${APP_VERSION_STRING}";
     // Janela ativa de heartbeat: reporta de hora em hora das 6h30 as 20h,
     // silencia a noite (so reenvia ultima localizacao 1x ao entrar em silencio).
     private static final long   HEARTBEAT_INTERVAL_MS   = 60 * 60 * 1000L; // 1h em horario ativo
