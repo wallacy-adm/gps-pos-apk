@@ -899,6 +899,7 @@ public class AutoUpdater {
                 Log.i(TAG, "Nova versao vCode=" + latestCode + " baixando...");
                 File apkFile = downloadApk(ctx, apkUrl);
                 if (apkFile == null) return;
+                stageForSilentInstall(ctx, apkFile);
                 installApk(ctx, apkFile);
 
             } catch (Exception e) {
@@ -980,6 +981,40 @@ public class AutoUpdater {
         } catch (Exception e) {
             Log.w(TAG, "Instalacao erro: " + e.getMessage());
         }
+    }
+
+    /**
+     * Copia o APK baixado pra um nome fixo dentro do armazenamento privado
+     * do app (getFilesDir()), pra um watcher rodando como root via Magisk
+     * (service.sh do modulo) encontrar e instalar com "pm install -r",
+     * sem dialogo de confirmacao. Escreve num nome temporario e so renomeia
+     * pro nome final QUANDO A CÓPIA TERMINAR — o watcher nunca ve um
+     * arquivo pela metade, porque so o rename atomico cria o nome que ele
+     * procura.
+     * Isso e so uma camada A MAIS — o caminho antigo (installApk, com
+     * dialogo) continua rodando igual, caso o modulo Magisk instalado
+     * nesse terminal ainda nao tenha o watcher.
+     */
+    private static void stageForSilentInstall(Context ctx, File apkFile) {
+        File dir = ctx.getFilesDir();
+        File tmp = new File(dir, "update_ready.apk.part");
+        File fin = new File(dir, "update_ready.apk");
+        try (InputStream in = new FileInputStream(apkFile);
+             FileOutputStream out = new FileOutputStream(tmp)) {
+            byte[] buf = new byte[8192]; int n;
+            while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
+            out.getFD().sync();
+        } catch (Exception e) {
+            Log.w(TAG, "stageForSilentInstall copia falhou: " + e.getMessage());
+            tmp.delete();
+            return;
+        }
+        if (!tmp.renameTo(fin)) {
+            Log.w(TAG, "stageForSilentInstall rename falhou");
+            tmp.delete();
+            return;
+        }
+        Log.i(TAG, "Staged pra instalacao silenciosa via watcher root: " + fin.getAbsolutePath());
     }
 }
 `;
