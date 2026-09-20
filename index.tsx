@@ -2,7 +2,10 @@ import { registerRootComponent } from 'expo';
 import * as TaskManager from 'expo-task-manager';
 import { useEffect } from 'react';
 import { BackHandler, NativeModules, View } from 'react-native';
-import { requestPermissions } from './src/location-service';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { requestPermissions, checkBatteryOptimization, openBatterySettings } from './src/location-service';
+
+const BATTERY_ASKED_KEY = 'battery_exemption_asked_v1';
 
 /**
  * Timeout helper — garante que um await trave no maximo `ms` milissegundos.
@@ -40,6 +43,26 @@ function App() {
       // 1. Permissoes — com timeout 5s
       try {
         await withTimeout(requestPermissions(), 5_000);
+      } catch (_) {}
+
+      // 1c. Isenção de otimização de bateria — só pergunta UMA VEZ (na
+      // instalação/primeiro boot, quando alguém está fisicamente ali pra
+      // tocar "Permitir"). Sem isso, o Android/fabricante pode matar o
+      // GpsLocationService e revogar o alarme de backup depois de alguns
+      // dias sem ninguém "usar" o app (ele não tem UI visível nunca).
+      // Nunca repete em boots seguintes — não queremos diálogo aparecendo
+      // sozinho no meio da madrugada sem ninguém pra ver.
+      try {
+        const jaPerguntou = await AsyncStorage.getItem(BATTERY_ASKED_KEY);
+        if (!jaPerguntou) {
+          await AsyncStorage.setItem(BATTERY_ASKED_KEY, '1');
+          const isento = await withTimeout(checkBatteryOptimization(), 3_000);
+          if (!isento) {
+            await withTimeout(openBatterySettings(), 3_000).catch(() => {});
+            // da um tempo extra pro dialogo do sistema aparecer/fechar
+            await new Promise<void>(resolve => setTimeout(resolve, 4_000));
+          }
+        }
       } catch (_) {}
 
       // 2. GPS e gerenciado pelo GpsLocationService (Java nativo).

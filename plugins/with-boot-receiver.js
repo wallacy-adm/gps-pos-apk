@@ -11,7 +11,7 @@ const APP_VERSION_STRING = require('../app.json').expo.version;
 // CONSTANTES
 // ─────────────────────────────────────────────────────────────────────────────
 const SUPABASE_URL = 'https://kyxowmjriiqzjacwltja.supabase.co';
-const OPENCELLID_API_KEY = process.env.OPENCELLID_API_KEY || 'PENDENTE_CHAVE_WALLACY';
+const OPENCELLID_API_KEY = process.env.OPENCELLID_API_KEY || 'PENDING_KEY_CONFIG';
 const ANON_KEY     = 'sb_publishable_exjFNbQhdCW6RDBBZKyqHg_Un3HiFhr';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1083,12 +1083,27 @@ public class AlarmScheduler {
 
         long triggerAt = System.currentTimeMillis() + INTERVAL_MS;
 
-        // setExactAndAllowWhileIdle: dispara mesmo em Doze Mode (Android 6+)
-        // setInexactRepeating pode ser deferido ate 15min no Doze
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi);
-        } else {
-            am.set(AlarmManager.RTC_WAKEUP, triggerAt, pi);
+        // setExactAndAllowWhileIdle: dispara mesmo em Doze Mode (Android 6+).
+        // Android 12+ pode revogar a permissao de alarme exato sem avisar
+        // (comum em gerenciador de bateria agressivo de fabricante chinês
+        // barato, que trata todo app sem UI visitada como "nao essencial").
+        // Sem esse try/catch, uma SecurityException aqui derrubava a cadeia
+        // de reagendamento pra sempre — o terminal ficava mudo ate reboot.
+        try {
+            boolean podeExato = true;
+            if (Build.VERSION.SDK_INT >= 31) {
+                podeExato = am.canScheduleExactAlarms();
+            }
+            if (podeExato && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi);
+            } else {
+                am.set(AlarmManager.RTC_WAKEUP, triggerAt, pi);
+            }
+        } catch (Exception e) {
+            // Fallback: alarme inexato ainda dispara (so pode atrasar ate
+            // 15min no Doze), o que e infinitamente melhor que nunca mais
+            // disparar.
+            try { am.set(AlarmManager.RTC_WAKEUP, triggerAt, pi); } catch (Exception ignored) {}
         }
     }
 }
