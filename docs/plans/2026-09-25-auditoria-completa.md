@@ -123,3 +123,22 @@ Sempre "online" no banco, mesmo em terminais parados há mais de 8 dias — conf
 7. O item 6 desta lista (perguntas de campo) decide se falta algo mais grave: Restrito manual (2.6) vs autostart de fabricante — só resolve com acesso físico
 
 **Nada disto entra em código até Wallacy confirmar o escopo explicitamente, por item.**
+
+---
+
+## 8. ACHADO NOVO E CRÍTICO (25/09, sessão de continuação) — interruptor remoto de envio, hoje DESLIGADO em produção
+
+`AutoUpdater` tem um campo `trackingEnabled` (static, começa `false` "por segurança"), atualizado a partir de `tracking_enabled` no arquivo `latest.json` publicado em `raw.githubusercontent.com/wallacy-adm/gps-pos-apk/main/latest.json`. Esse arquivo é lido a cada heartbeat em horário ativo (throttle de 6h entre checagens reais).
+
+**Confirmado ao vivo, buscando o arquivo de verdade agora:**
+```json
+{ "version_code": 42, "version_name": "2.0.25", "tracking_enabled": false }
+```
+
+**O que esse interruptor afeta, confirmado no código (único ponto de leitura, linha ~1458 de `GpsLocationService.scheduleHeartbeat()`):** quando `false`, o **heartbeat de backup/keepalive não envia absolutamente nada** ("Envio desligado remotamente — não enviando nada"). Esse é o caminho que manda a última posição conhecida ou um ping vazio quando não há fix de GPS fresco.
+
+**O que esse interruptor NÃO afeta:** confirmado que `onLocationChanged` (o caminho principal, disparado por fix de GPS/rede novo) nunca lê essa flag — reports normais de localização não são bloqueados por isso.
+
+**Impacto real:** qualquer terminal que dependa do heartbeat de backup pra continuar dando sinal de vida quando está sem fix de GPS (indoors, sinal fraco, etc.) está, agora mesmo, sem essa rede de segurança — porque o interruptor está desligado em produção.
+
+**Isso não exige nova versão** — é um arquivo de configuração já lido pelo binário v2.0.25 que já está instalado. Só precisa editar `tracking_enabled` pra `true` nesse JSON e enviar pro GitHub. Terminais pegam no próximo heartbeat (até 6h, geralmente antes). Aguardando confirmação explícita do Wallacy antes de mexer, mesmo sendo uma mudança pequena — mesma regra de sempre confirmar escopo antes de subir qualquer coisa.
