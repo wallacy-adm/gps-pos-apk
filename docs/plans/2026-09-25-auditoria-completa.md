@@ -18,8 +18,10 @@
 
 ## 2. Bugs confirmados — app Android (`gps-pos-apk`, `plugins/with-boot-receiver.js`)
 
-### 2.1 [GRAVE] Threads sem fila no envio de rede
-Cada heartbeat/location dispara em `new Thread` separada, sem fila nem sincronização (8 pontos no código, já mapeados em sessão anterior). Causa raiz de dois problemas ao mesmo tempo:
+### 2.1 [GRAVE] Threads sem fila no envio de rede — diagnóstico refinado (26/09, leitura completa do `onLocationChanged`)
+Correção importante em relação ao que estava registrado antes: dentro de uma ÚNICA chamada a `sendToSupabase()`, heartbeat e location NÃO são duas threads separadas — são sequenciais, uma espera a outra (heartbeat primeiro, usa o `device_id` da resposta pra gravar location depois). A causa real da falta de fila é outra, e mais ampla: existem **3 pontos independentes** que cada um dispara sua própria `new Thread`, sem nenhuma coordenação entre eles: (1) `onLocationChanged` a cada fix aceito de GPS/rede, (2) o loop interno de heartbeat (`scheduleHeartbeat`, dentro do próprio serviço, dispara `sendKeepalive` ou `sendToSupabase` conforme o caso), (3) o `AlarmReceiver` externo (via `AlarmManager` do Android, funciona mesmo se o processo caiu). Quando dois desses disparam quase juntos — ex: um fix GPS chega bem na hora que o heartbeat interno também dispara — as duas threads competem sem fila, e é aí que o banco pode gravar fora de ordem.
+
+Cada heartbeat/location dispara em `new Thread` separada, sem fila nem sincronização entre os 3 pontos acima. Causa raiz de dois problemas ao mesmo tempo:
 - Falso positivo de geofence (leituras chegam fora de ordem no banco)
 - Falso negativo de geofence (gatilho do banco não acha a leitura correspondente e fica em silêncio — ver 2.7)
 
@@ -190,3 +192,14 @@ Reavaliei com esse critério novo, e a notícia é boa: **o caminho certo pra is
 Essa rota não tem o problema da seção 9.3 (nunca testado em campo) do mesmo jeito — o mecanismo em si (`PackageInstaller`) é usado por milhões de apps Android, é o mais testado que existe. O que precisa de teste de campo aqui é só a experiência (a notificação aparece direito, o relançamento funciona) — não a mecânica de instalar em si.
 
 **Ainda planejamento, nada implementado.** Aguardando confirmação de escopo antes de escrever qualquer uma das 3 peças.
+
+---
+
+## 11. `onLocationChanged` lido por completo (26/09) — confirma o que já estava registrado, sem achado novo grave
+
+Lógica de convergência de GPS (`gpsCandidates`, `GPS_CANDIDATE_WINDOW`) e a lógica de WiFi vs. celular-só (`lastNetworkFixWasWifi`, janela de 20min) estão bem desenhadas — não é código ruim, essa parte já era confiável antes desta auditoria. Confirma três coisas já sabidas, agora com leitura direta da fonte:
+- `MIN_DIST_M = 0f` é usado tanto pro GPS_PROVIDER quanto pro NETWORK_PROVIDER (linha ~1387) — nenhum dos dois tem filtro de distância
+- Todo envio (`sendToSupabase`) sai numa `new Thread` nova (linha ~1367) — sem fila, como já registrado
+- `isActiveWindow()` existe só uma vez no app (dentro de `GpsLocationService`, linha 1421) — não há duplicação interna no app; a duplicação real é entre o app e o painel gps-cg (item 3.1), que continua de pé
+
+Com isso, considero o app auditado de ponta a ponta nesta sessão — as classes que restam sem leitura linha a linha (`LocationStore`, `ImeiModule` completo, `isImpossibleJump`, os fallbacks de torre/IP) são as mesmas que já tinham sido lidas e mapeadas na auditoria de 22/09 (ver histórico), não ficaram de fora — só não foram relidas nesta sessão por já não terem achado pendente aberto.
