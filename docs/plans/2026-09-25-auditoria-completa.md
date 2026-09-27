@@ -165,3 +165,28 @@ Instalar via `pm install -r` enquanto o serviço está rodando tende a matar o p
 Confirmado (repetindo o que já estava mapeado): o único teste de campo ficou bloqueado no Positivo L3 pelo Magisk incompleto (seção 6). Isso significa que mesmo a parte que LEIO como correta (o path batendo, o `pm install -r` como root) nunca rodou de verdade, uma vez sequer, em hardware real.
 
 **Conclusão**: dois motivos concretos pra não confiar cegamente hoje — 1 lacuna de código real (falta o `MY_PACKAGE_REPLACED`) e zero validação de campo. Os dois precisam ser resolvidos antes de contar com atualização silenciosa pra qualquer rollout futuro.
+
+---
+
+## 10. Revisão da estratégia de atualização (26/09) — Wallacy aceita 1 toque, pede que funcione em TODOS os terminais sem exceção
+
+Reavaliei com esse critério novo, e a notícia é boa: **o caminho certo pra isso já existe em grande parte no código — é mais simples e mais confiável que o caminho silencioso via root que a gente vinha tentando.**
+
+### Por que o caminho com toque é mais confiável, não só mais simples
+`installApk()` usa `PackageInstaller`, API padrão do Android — funciona em QUALQUER aparelho Android certificado, independente de ter Magisk, root, ou qual ROM é. Não depende de nada que já vimos falhar nesta sessão (Magisk incompleto no L3, ROMs que não mostram a tela de isenção de bateria, heterogeneidade de hardware). É o caminho oposto do watcher root: em vez de depender do que há de mais frágil na frota, depende só do que todo Android é obrigado a suportar.
+
+### O que já existe, confirmado no código (não precisa construir do zero)
+- `REQUEST_INSTALL_PACKAGES` já declarado no manifesto (linha ~2119)
+- `installApk()` já monta a sessão de instalação e já dispara o fluxo de confirmação do Android quando encontra versão nova
+- `InstallReceiver` já recebe o resultado (sucesso/pendente/falha) — hoje só loga, mas o ponto de entrada certo já está pronto
+- O app já tem canal de notificação configurado (`createNotificationChannel()`, linha ~1705) — mesmo sem ícone de launcher, um serviço em segundo plano pode postar notificação normalmente; não precisa criar infraestrutura nova pra isso
+
+### O que falta, 3 peças pequenas, nenhuma exige root nem Device Owner
+1. Notificação customizada ("Atualização disponível, toque para continuar") em vez de deixar só a tela genérica do Android aparecer sozinha
+2. `MY_PACKAGE_REPLACED` registrado no `BootReceiver` (mesmo achado da seção 9) — isso faz o app voltar sozinho, sem precisar de reboot do aparelho
+3. Em `InstallReceiver`, no `STATUS_SUCCESS`: postar 1 notificação de fechamento — algo como "Atualização concluída. Se o app não voltar em 1 minuto, reinicie o terminal." Cobre os dois casos que o Wallacy pediu (volta sozinho OU avisa pra reiniciar) com uma mensagem só, sem precisar detectar se o relançamento automático funcionou de verdade.
+
+### Diferença de risco vs. a rota antiga (root/Magisk)
+Essa rota não tem o problema da seção 9.3 (nunca testado em campo) do mesmo jeito — o mecanismo em si (`PackageInstaller`) é usado por milhões de apps Android, é o mais testado que existe. O que precisa de teste de campo aqui é só a experiência (a notificação aparece direito, o relançamento funciona) — não a mecânica de instalar em si.
+
+**Ainda planejamento, nada implementado.** Aguardando confirmação de escopo antes de escrever qualquer uma das 3 peças.
