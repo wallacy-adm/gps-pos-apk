@@ -142,3 +142,26 @@ Sempre "online" no banco, mesmo em terminais parados há mais de 8 dias — conf
 **Impacto real:** qualquer terminal que dependa do heartbeat de backup pra continuar dando sinal de vida quando está sem fix de GPS (indoors, sinal fraco, etc.) está, agora mesmo, sem essa rede de segurança — porque o interruptor está desligado em produção.
 
 **Isso não exige nova versão** — é um arquivo de configuração já lido pelo binário v2.0.25 que já está instalado. Só precisa editar `tracking_enabled` pra `true` nesse JSON e enviar pro GitHub. Terminais pegam no próximo heartbeat (até 6h, geralmente antes). Aguardando confirmação explícita do Wallacy antes de mexer, mesmo sendo uma mudança pequena — mesma regra de sempre confirmar escopo antes de subir qualquer coisa.
+
+---
+
+## 9. Resposta à pergunta "a atualização automática vai funcionar de verdade?" (26/09)
+
+**Direto: hoje, sim, fica no achismo — mas não por estar obviamente quebrado, e sim por dois motivos concretos.**
+
+### 9.1 Cadeia completa, lida ponta a ponta agora
+- `AutoUpdater.checkAndUpdate()` baixa o APK novo, chama SEMPRE os dois caminhos juntos: `installApk()` (via `PackageInstaller`, o caminho com diálogo, exige toque humano) e `stageForSilentInstall()` (grava em `getFilesDir()/update_ready.apk`, via rename atômico — escreve certo)
+- `service.sh` do módulo Magisk (`C:\Users\walla\build_magisk_module.py`, fora deste repo): roda como root a cada boot, verifica `/data/user/0/com.system.posservice/files/update_ready.apk` e `/data/data/com.system.posservice/files/update_ready.apk` a cada 5min, instala com `pm install -r` sem diálogo (`pm install` como root de fato instala sem diálogo — isso está certo)
+- **O caminho do arquivo bate exato** entre o que o app escreve e o que o watcher procura — não é bug de path, essa parte está correta.
+
+### 9.2 [NOVO, achado agora] Nada relança o serviço depois da instalação silenciosa
+Confirmado com busca no arquivo inteiro: **não existe, em lugar nenhum, um receptor pra `ACTION_MY_PACKAGE_REPLACED`** — o broadcast que o Android dispara automaticamente pra um app logo depois de ser atualizado. `BootReceiver` só escuta `BOOT_COMPLETED`.
+
+Instalar via `pm install -r` enquanto o serviço está rodando tende a matar o processo atual (comportamento padrão do Android ao trocar o APK). Sem esse receptor, nada garante que o serviço volta sozinho na hora — só reinicia com certeza se o aparelho reiniciar de verdade (`BootReceiver` pega) ou se o alarme do `AlarmReceiver` já agendado sobreviver à atualização e disparar depois (histórico do Android sugere que sim, na maioria dos casos, mas isso não foi confirmado neste código nem testado).
+
+**Fix simples, ainda planejamento**: registrar `MY_PACKAGE_REPLACED` no mesmo `BootReceiver` (mesma lógica de "start do zero" serve pros dois casos).
+
+### 9.3 Nunca testado de ponta a ponta em aparelho real
+Confirmado (repetindo o que já estava mapeado): o único teste de campo ficou bloqueado no Positivo L3 pelo Magisk incompleto (seção 6). Isso significa que mesmo a parte que LEIO como correta (o path batendo, o `pm install -r` como root) nunca rodou de verdade, uma vez sequer, em hardware real.
+
+**Conclusão**: dois motivos concretos pra não confiar cegamente hoje — 1 lacuna de código real (falta o `MY_PACKAGE_REPLACED`) e zero validação de campo. Os dois precisam ser resolvidos antes de contar com atualização silenciosa pra qualquer rollout futuro.
