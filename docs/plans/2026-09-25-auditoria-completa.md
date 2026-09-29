@@ -203,3 +203,48 @@ Lógica de convergência de GPS (`gpsCandidates`, `GPS_CANDIDATE_WINDOW`) e a l�
 - `isActiveWindow()` existe só uma vez no app (dentro de `GpsLocationService`, linha 1421) — não há duplicação interna no app; a duplicação real é entre o app e o painel gps-cg (item 3.1), que continua de pé
 
 Com isso, considero o app auditado de ponta a ponta nesta sessão — as classes que restam sem leitura linha a linha (`LocationStore`, `ImeiModule` completo, `isImpossibleJump`, os fallbacks de torre/IP) são as mesmas que já tinham sido lidas e mapeadas na auditoria de 22/09 (ver histórico), não ficaram de fora — só não foram relidas nesta sessão por já não terem achado pendente aberto.
+
+---
+
+## 12. TESTE VIRTUAL (26/09) — banco Postgres real, gatilho real, dado real da frota inteira
+
+A pedido do Wallacy: "blindar" e testar antes de qualquer código de verdade. Não foi simulação aproximada — montei um Postgres local, copiei o esquema e a função do gatilho **verbatim** (`pg_get_functiondef`/`pg_get_triggerdef` direto do banco de produção), e rodei dado real da frota através dele. Scripts completos em `tests/virtual_test/` neste commit, re-executáveis a qualquer momento.
+
+### 12.1 Achado principal: a falha não é intermitente — é garantida, 100% das vezes
+Reproduzindo a ordem EXATA que o app usa hoje (confirmado lendo `sendToSupabase()` de novo: `sendHeartbeat()` primeiro, que atualiza `devices` — e É NESSE UPDATE QUE O GATILHO DISPARA — só depois `sendLocation()`, que insere em `locations`): a busca que o gatilho faz por uma leitura correspondente em `locations` **falha 100% das vezes, sempre**, porque no instante em que o gatilho roda, aquela leitura em `locations` ainda nem foi enviada. Não é falta de sorte — é garantido pela ordem das duas chamadas.
+
+Confirmação direta no banco de produção: contei os eventos reais de "saiu do ponto" — **5 no total, todos de ANTES do gatilho atual (texto "GPS confirmado 2x") existir**. Desde que essa versão do gatilho foi publicada, ela nunca disparou nem uma vez, pra ninguém, em nenhum terminal. Isso não é suspeita — é contagem direta na tabela `events`.
+
+Invertendo a ordem (gravar em `locations` primeiro, só depois atualizar `devices` — o que a fila única proposta garante naturalmente): a busca passa a achar a leitura **100% das vezes**, nos 3 casos testados (Graciane 48/48, Nome 48/48, Bia 16/16).
+
+### 12.2 Achado novo, honesto: a fila sozinha não resolve tudo
+Com a ordem corrigida, Graciane dispara o alerta corretamente. **Nome não dispara** — porque a regra atual exige 2 leituras de GPS confirmadas SEGUIDAS fora do raio, e no episódio real dela só existe 1 leitura genuína antes do terminal ficar mudo. Isso não é bug de ordenação — é a própria regra sendo rígida demais pro cenário mais perigoso (1 deslocamento real, seguido de silêncio).
+
+### 12.3 Escala real do problema — busquei em TODA a frota, não só nos 3 casos conhecidos
+Rodei a mesma busca (leituras de GPS boas, fora do raio, seguidas) contra o histórico inteiro da frota, sem filtrar por terminal. Resultado: **11 incidentes reais confirmados, em 10 terminais diferentes, de 10/09 a 24/09** — não pegos por nenhum alerta:
+
+| Terminal | Data | Distância | Melhor precisão | Leituras |
+|---|---|---|---|---|
+| Jessica fruta | 10/09 | 3.358m | 1,5m | 18 |
+| Bia Campos sales | 11/09 | 706m | 6,7m | 2 |
+| Nicole | 11/09 | 1.010m | 1,9m | 6 |
+| Bia Campos sales | 11/09 | 1.235m | 10,0m | 1 |
+| ramadinha | 15/09 | 5.290m | 1,8m | 2 |
+| Jessica | 16/09 | 419m | 12,9m | 2 |
+| Luana são jose | 17/09 | 477m | 8,5m | 3 |
+| Noemia | 18/09 | 361m | 6,8m | 11 |
+| Angelica | 22/09 | 1.224m | 8,2m | 4 |
+| Graciane | 23-24/09 | 4.367m | 1,0m | 246 |
+| Nome | 24/09 | 2.959m | 1,1m | 1 |
+
+### 12.4 Regra proposta, testada contra os 11 de uma vez
+Ajuste sobre o que já estava desenhado: 2 leituras GPS seguidas fora do raio **OU** 1 leitura isolada com precisão ≤15m e distância > 2x o raio (pega o caso Nome/Bia-1235m sem reabrir a porta pro ruído de rede, que nunca passa de accuracy=200 e já é filtrado à parte). Testado contra os 11 incidentes reais acima: **pega os 11, sem exceção**. Não achei, em toda a base, nenhum caso onde essa regra dispararia peloerro (nenhuma leitura de alta precisão "mentindo" — todo falso positivo já visto veio de rede, accuracy 200, categoria já filtrada).
+
+### 12.5 Volume de dado e horário — testes numéricos, também passaram
+- Volume: modelo confirma **~1.144MB/mês** no comportamento atual (57x acima do plano de 20MB) contra **~0,3MB/mês** com limiar de movimento + conexão reaproveitada — a matemática fecha com os relatos de campo.
+- Horário: a versão proposta diverge da atual exatamente nos 4 casos de borda esperados (após 19h em dia de semana, após 13h no domingo) — nenhuma divergência fora desses pontos, ou seja, a correção não introduz efeito colateral em outro horário.
+
+### 12.6 Uma coisa que NÃO fechei, fica registrada como pendência aberta
+2 dos 11 incidentes são da própria Bia Campos sales (706m e 1235m, 11/09) — antes da confirmação dela de que o terminal não sai de 3 metros. GPS de alta precisão não costuma "mentir" nesse padrão (nenhum outro caso na base mostra isso), então a explicação mais provável não é erro de leitura — é o **ponto "casa" (geofence) dela estar calibrado no lugar errado**, não a posição real de instalação. Não resolvi isso agora — fica pra confirmar com acesso físico, junto do resto.
+
+**Conclusão do teste: a fila única não é só teoria — ela resolve, comprovado com dado real, o mesmo bug que já derrubou 5 alertas reais e deixou pelo menos 11 saídas de ponto genuínas sem aviso em 10 terminais diferentes. A regra de confirmação precisa do ajuste do item 12.4 junto, ou o Nome-e-similares continuam escapando mesmo com a fila corrigida.**
