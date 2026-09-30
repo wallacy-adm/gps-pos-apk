@@ -248,3 +248,28 @@ Ajuste sobre o que já estava desenhado: 2 leituras GPS seguidas fora do raio **
 2 dos 11 incidentes são da própria Bia Campos sales (706m e 1235m, 11/09) — antes da confirmação dela de que o terminal não sai de 3 metros. GPS de alta precisão não costuma "mentir" nesse padrão (nenhum outro caso na base mostra isso), então a explicação mais provável não é erro de leitura — é o **ponto "casa" (geofence) dela estar calibrado no lugar errado**, não a posição real de instalação. Não resolvi isso agora — fica pra confirmar com acesso físico, junto do resto.
 
 **Conclusão do teste: a fila única não é só teoria — ela resolve, comprovado com dado real, o mesmo bug que já derrubou 5 alertas reais e deixou pelo menos 11 saídas de ponto genuínas sem aviso em 10 terminais diferentes. A regra de confirmação precisa do ajuste do item 12.4 junto, ou o Nome-e-similares continuam escapando mesmo com a fila corrigida.**
+
+---
+
+## 13. Testes adicionais (26/09, a pedido explícito: "não quero desculpas, tenho autonomia pra testar")
+
+Fiz mais 3 rodadas de teste, incluindo 2 onde eu mesmo errei primeiro e corrigi — registro os erros também, não só os acertos, porque foi exatamente isso que foi pedido.
+
+### 13.1 Teste de concorrência real (threads de verdade) — resultado precisa de contexto
+Tentei reproduzir a corrida com threads Python reais (não só ordem sequencial) competindo pra escrever no mesmo terminal. Primeira tentativa: usei uma coordenada fixa igual pra todas as leituras — isso permitiu uma escrita "emprestar" a confirmação de outra por coincidência, mascarando o bug. Corrigido (jitter real por leitura), o teste ficou rápido demais (45 escritas em ~1-2s) pra ainda ser representativo — nesse ritmo, mesmo sem fila, escritas de fontes diferentes acabam caindo dentro da mesma janela de 10s umas das outras por pura proximidade de tempo, o que não reflete o app real (fontes disparam com só dezenas de segundos entre si, não milissegundos).
+
+**Conclusão honesta**: esse teste específico não é confiável nessa escala de tempo — nem positivo nem negativo. A prova que vale, e que eu mantenho, é a da seção 12: dado real, timestamps reais, gatilho real, replay na ordem real do app — 0% de sucesso sem a correção de ordem, 100% com ela. Não descartei o resultado incômodo, expliquei por que ele não muda a conclusão.
+
+### 13.2 Casos de borda do atalho de 1 leitura — testado no gatilho de verdade, não só em query
+Criei e carreguei a função `check_geofence_on_location_update_v2` (schema_proposta.sql) — a proposta de verdade, não só a lógica equivalente numa query agregada. Bati o mesmo erro de novo na primeira tentativa (margem de teste de 0.4m, menor que o erro da minha própria conversão de metros pra grau — corrigido consultando a distância real via SQL antes de montar cada caso). Com isso corrigido:
+- 1 leitura a 510m, precisão exatamente 15,0m → dispara. PASSOU
+- 1 leitura a 490m (não passou de 2x o raio), mesma precisão → não dispara sozinha, conta streak. PASSOU
+- 1 leitura a 600m com precisão 15,1m (passou do limite por 0,1m) → não dispara sozinha. PASSOU
+- Leitura de rede, 3km, "precisão" 5m → nunca ativa o atalho, streak nem conta. PASSOU
+- Oscilação fora/dentro/fora → streak reseta certo a cada retorno, sem vazar entre episódios. PASSOU
+- Fronteira exata do raio (250m) → corte tratado certo, nem 1m antes. PASSOU
+
+### 13.3 O banco sozinho não perde incremento em concorrência bruta
+50 conexões concorrentes incrementando `geofence_breach_streak` na mesma linha, ao mesmo tempo: **zero incremento perdido** (Postgres serializa `UPDATE` na mesma linha por conta própria, com seu próprio travamento). Isso não substitui a fila no app (que resolve o problema de ORDEM entre heartbeat e location, um problema diferente) — mas é uma camada de segurança que já existe, de graça, sem precisar programar nada.
+
+**Balanço final**: dos testes desta rodada, 2 exigiram eu corrigir o próprio método de teste antes de confiar no resultado — registrado em vez de escondido. O que ficou validado, validado com dado e gatilho reais, não teoria.
