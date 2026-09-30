@@ -273,3 +273,29 @@ Criei e carreguei a função `check_geofence_on_location_update_v2` (schema_prop
 50 conexões concorrentes incrementando `geofence_breach_streak` na mesma linha, ao mesmo tempo: **zero incremento perdido** (Postgres serializa `UPDATE` na mesma linha por conta própria, com seu próprio travamento). Isso não substitui a fila no app (que resolve o problema de ORDEM entre heartbeat e location, um problema diferente) — mas é uma camada de segurança que já existe, de graça, sem precisar programar nada.
 
 **Balanço final**: dos testes desta rodada, 2 exigiram eu corrigir o próprio método de teste antes de confiar no resultado — registrado em vez de escondido. O que ficou validado, validado com dado e gatilho reais, não teoria.
+
+---
+
+## 14. Auditoria do painel (26/09 tarde) — achado confirmado AO VIVO, com exemplo real agora mesmo
+
+Wallacy relatou ver o mapa mostrando "off" e a aba do dispositivo mostrando "on" pro mesmo terminal. Fui no código-fonte completo do painel (`src/lib/fleet.ts`, `FleetMap.tsx`, `TrackMap`/detalhe, lista) pra achar a causa exata, não só teorizar.
+
+### 14.1 Achei: são 2 funções de status diferentes, com 2 regras diferentes
+- **`connState()`** (usada só na tabela da lista): limiar de **15 minutos** (vem de `settings.offline_threshold_minutes`) **e respeita a janela de horário combinada** — fora do horário ativo, mostra "Em repouso" (cinza) em vez de alarmar.
+- **`deviceHealth()`** (usada no Mapa da Frota E na página de detalhe do terminal — as duas, a mesma função): limiar fixo de **5 minutos, direto no código**, e **nunca checa a janela de horário** — passou de 5 minutos sem reportar, mostra "Offline" (vermelho), não importa se são 7h da manhã ou 23h de um domingo em repouso programado.
+
+### 14.2 Prova ao vivo, agora (30/09, 07h43 BRT, dentro do horário ativo)
+Terminal **"Luana centro"**: 5,1 minutos sem reportar nesse instante. Rodando as duas fórmulas com esse dado real:
+- `connState`: 5,1 min < 15 min → **"Ligado"** (verde)
+- `deviceHealth`: 5,1 min > 5 min → **"Offline"** (vermelho)
+
+**Nesse exato momento, esse terminal aparece verde na lista e vermelho no mapa e no detalhe — mesmo terminal, mesmo instante.** Isso confirma exatamente o que você notou, com terminal e horário reais, não hipótese.
+
+### 14.3 O problema fica muito maior fora do horário ativo
+Isso que aconteceu agora com 1 terminal (por coincidência de timing) acontece com **a frota inteira, todo santo dia**, depois das 19h/20h ou no domingo à tarde: como `deviceHealth` nunca olha a janela de horário, todo terminal em repouso programado (comportamento correto, esperado) aparece "Offline" vermelho no mapa e no detalhe — só a lista mostra a calma "Em repouso". É bem provável que essa seja a origem real da sua sensação de "não confiar na tela" que você descreveu semana passada, mais do que o próprio silêncio em si.
+
+### 14.4 Achado secundário, no código, ainda não confirmado com exemplo ao vivo
+`reactivateDevice()` grava `status = 'offline'` explicitamente no banco ao reativar um terminal arquivado. Como `deviceHealth()` exige `status === 'online'` pra considerar o terminal vivo, e não achei nenhum lugar no app Android que volte a escrever `status='online'` depois disso, um terminal reativado **poderia ficar preso mostrando "Offline" pra sempre**, mesmo reportando normalmente. Não confirmei isso com um caso real (nenhum terminal foi arquivado/reativado ainda, pelo que vejo no banco) — fica registrado como suspeita fundamentada, não fato.
+
+### 14.5 Sugestão de melhoria (pedida explicitamente)
+Unificar: usar só `connState()`-style (limiar configurável + respeita a janela) em TODO lugar — mapa, detalhe e lista —, e aposentar `deviceHealth()` como está. O estado "degradado" (rede, amarelo) que `deviceHealth` já tem é útil e vale manter, só que combinado com a lógica de janela do `connState`, não substituindo ela. Um resultado: 1 função de status, 1 verdade, em todo o painel.
