@@ -299,3 +299,8 @@ Isso que aconteceu agora com 1 terminal (por coincidência de timing) acontece c
 
 ### 14.5 Sugestão de melhoria (pedida explicitamente)
 Unificar: usar só `connState()`-style (limiar configurável + respeita a janela) em TODO lugar — mapa, detalhe e lista —, e aposentar `deviceHealth()` como está. O estado "degradado" (rede, amarelo) que `deviceHealth` já tem é útil e vale manter, só que combinado com a lógica de janela do `connState`, não substituindo ela. Um resultado: 1 função de status, 1 verdade, em todo o painel.
+
+### 14.6 Complemento (30/09, 12h54 BRT): leitura mais provável do relato + achado menor
+- "Aba dispositivos" é provavelmente a tela de lista (menu "Dispositivos", usa `connState`, 15min, respeita horário). Mapa da Frota e página de detalhe usam a MESMA `deviceHealth` (5min, sem horário) — entre elas dois só pode haver diferença de timing de refetch, não de regra. A divergência reproduzível e provada é mapa/detalhe (vermelho) vs lista (verde), exatamente o caso "Luana centro" da 14.2.
+- Achado menor: `fetchLatestProviders()` usa `LIMIT 2000` nas leituras mais recentes da frota. Medido agora: 1.240 linhas nos últimos 30min; o corte de 2000 alcança só até ~46min atrás. Terminal parado há mais que isso não tem entrada → coluna "Sinal" vazia pra ele. Baixa gravidade hoje (quem está parado >46min já aparece offline de qualquer forma) e tende a se resolver sozinho quando o limiar de movimento reduzir o volume, mas o correto é buscar a última leitura por terminal, não as 2000 últimas da frota.
+- Conferido no painel e sem achado novo: lista (`devices.index.tsx`), mapa (`FleetMap.tsx`), detalhe (`devices.$id.tsx`), `fleet.ts`. Não li ainda: `settings`, `events` e `login` do painel.
