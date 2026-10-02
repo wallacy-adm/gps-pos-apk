@@ -304,3 +304,45 @@ Unificar: usar só `connState()`-style (limiar configurável + respeita a janela
 - "Aba dispositivos" é provavelmente a tela de lista (menu "Dispositivos", usa `connState`, 15min, respeita horário). Mapa da Frota e página de detalhe usam a MESMA `deviceHealth` (5min, sem horário) — entre elas dois só pode haver diferença de timing de refetch, não de regra. A divergência reproduzível e provada é mapa/detalhe (vermelho) vs lista (verde), exatamente o caso "Luana centro" da 14.2.
 - Achado menor: `fetchLatestProviders()` usa `LIMIT 2000` nas leituras mais recentes da frota. Medido agora: 1.240 linhas nos últimos 30min; o corte de 2000 alcança só até ~46min atrás. Terminal parado há mais que isso não tem entrada → coluna "Sinal" vazia pra ele. Baixa gravidade hoje (quem está parado >46min já aparece offline de qualquer forma) e tende a se resolver sozinho quando o limiar de movimento reduzir o volume, mas o correto é buscar a última leitura por terminal, não as 2000 últimas da frota.
 - Conferido no painel e sem achado novo: lista (`devices.index.tsx`), mapa (`FleetMap.tsx`), detalhe (`devices.$id.tsx`), `fleet.ts`. Não li ainda: `settings`, `events` e `login` do painel.
+
+---
+
+## 15. CRÉDITOS DO LOVABLE (01/10) — o sistema travou por crédito e eu não tinha medido isso
+
+### 15.1 Dado real (print do Wallacy, Cloud > Usage, "Last 30 days")
+- **21,1 run credits em 30 dias**, contra a cota gratuita de **20/mês** (plano free). Ou seja: passou da cota do mês.
+- Por categoria: **Database server 20,2 (96%)**, Compute 0,53, Network 0,37, Database storage 0. O gasto é todo em LEITURA/ESCRITA no banco, não em armazenamento nem em tráfego de rede.
+- Linha do tempo (barras do gráfico): de 02/09 a ~15/09 consumo de ~0,05 a 0,08 por dia. **A partir de ~16/09 sobe pra ~1,95 por dia (cerca de 25 a 30 vezes mais)** e fica assim: 16, 17, 18, 19/09 ≈ 1,95; 20/09 ≈ 1,75; 21 a 23/09 ≈ 1,1 a 1,3; 24, 25, 26/09 ≈ 1,95; 27/09 ≈ 1,0; **28, 29 e 30/09 sem barra**; 01/10 já ≈ 1,2.
+- Conta acumulada (leitura aproximada do gráfico): ~1 até 15/09, ~20 ao fim de 26/09. A cota de 20 acaba por volta de **26 a 27/09**, e o 27/09 já aparece pela metade. Os dias 28 a 30 sem barra batem com o sistema parado. Ressalva: o banco respondeu consultas minhas em 30/09, e a tela avisa que o uso pode demorar a aparecer, então a data exata da pausa precisa da tela "Plans & credit usage". Em 01/10 a cota renovou (a barra de hoje voltou) e as consultas ao banco continuaram voltando "request_cancelled".
+
+### 15.2 Projeção (isso é o que importa)
+Mantido o ritmo atual (~1,95/dia), a cota de 20 de outubro acaba em **~10 a 11 dias (por volta de 10 a 11/10)**. Para durar o mês inteiro o teto é **20 ÷ 31 ≈ 0,65 crédito/dia**. Precisa cortar **no mínimo ~67%**; com margem de segurança, a meta é **≤ 0,5/dia (corte de ~75%)**.
+
+### 15.3 Por que o consumo pulou ~28x em 16/09 — NÃO CONFIRMADO, hipóteses a medir
+O consumo é de banco, então a causa está em quantidade ou peso das consultas. Candidatas, da mais provável pra menos:
+1. Terminais migrando em massa pro projeto novo por volta de 14 a 16/09 (rollout físico das versões 2.0.21/2.0.22 com a credencial nova): o tráfego da frota inteira chegou de uma vez.
+2. Consulta pesada disparada a cada escrita: o gatilho de geofence faz uma busca em `locations` a cada atualização de terminal. Sem índice adequado, cada uma varre a tabela inteira (já passa de 380 mil linhas). Precisa conferir os índices.
+3. Painel: atualização automática a cada 30s por aba aberta + consultas pesadas (`LIMIT 2000` ordenado; 24h por terminal no detalhe).
+4. Minhas varreduras da auditoria (381 mil linhas com função de janela, várias vezes), no fim de setembro. Não pesei o custo na hora. Erro meu.
+5. `tracking_enabled=true` (ligado 26/09): só ~1 heartbeat/hora por terminal, ~1 a 3% do tráfego. Não explica sozinho, mas conta.
+Como medir quando o banco responder: `pg_stat_statements` (extensão já instalada) ordenado por tempo total e número de chamadas; `pg_indexes` de `locations`; contagem de linhas por dia em `locations`.
+
+### 15.4 Plano de corte (planejamento, nada aplicado)
+1. **Medir antes de cortar** (item 15.3, consultas pequenas, uma por vez).
+2. **Um único RPC no banco (`report_position`)**: grava o terminal e a leitura numa transação só, na ordem certa. Metade das requisições e conserta a ordem do gatilho de geofence (seção 12). Maior alavanca.
+3. **Índice certo em `locations`** (`device_id, recorded_at`) se faltar. Pode derrubar o custo de cada escrita.
+4. **App**: limiar de movimento, fila única, reaproveitar conexão, janela de horário certa. Já no plano.
+5. **Painel**: intervalo de atualização maior (hoje 30s), última leitura por terminal em vez de `LIMIT 2000`, limitar o histórico do detalhe.
+6. **Retenção**: apagar/arquivar leituras antigas (prazo a decidir com o Wallacy).
+7. **Parâmetros de envio (intervalo, distância mínima) vindos do `latest.json`**: reduz o tráfego da frota sem visita física numa próxima crise.
+8. **Regra minha daqui pra frente**: estimar o custo antes de qualquer varredura grande no banco; consulta pequena; reaproveitar dado já em arquivo.
+9. **Ponto de controle**: olhar Usage a cada 3 dias e anotar aqui. Alerta interno em 0,65/dia.
+
+### 15.5 Painel: leitura de settings, login e rotas (feita nesta rodada)
+- **Settings**: "Raio da cerca virtual" grava em `settings.geofence_radius`, mas o gatilho lê `geofences.radius_meters` por terminal. Mudar o raio na tela não muda o raio real do alerta. `geofence_hours`: não achei nada que use.
+- **Login**: usuário e PIN têm valor padrão escrito no código (visível a quem abrir o JS); a "sessão" é um número no localStorage.
+- **Permissões do banco**: `devices`, `locations` e `events` liberam tudo pro papel anônimo; `geofences` e `settings` estão sem RLS. Quem tiver a chave pública lê e altera tudo, inclusive apaga. Trade-off já aceito, mas o risco inclui apagar dados.
+- **Pendente de verificar com o banco de volta**: (a) se a consulta de 24h do detalhe estoura o limite padrão de 1000 linhas por requisição e mostra o ponto errado como "último"; (b) terminais com `status` nulo (somem do painel por causa de `neq`); (c) índices de `locations`.
+
+### 15.6 O que faltou nesta sessão (registro)
+Eu mexi no banco e no painel por semanas sem nunca abrir Usage nem estimar custo de Cloud. Esse era o ponto cego. Corrigido a partir de agora: item 15.4.8 e 15.4.9.
