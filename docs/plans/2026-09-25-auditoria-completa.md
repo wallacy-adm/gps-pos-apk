@@ -440,3 +440,31 @@ Cadastrado hoje 03/10 06h44 BRT, IMEI 354015117066357, app 2.0.25, posição a ~
 
 ### 17.5 Correção proposta (NÃO aplicada)
 Uma única função de status para o painel inteiro (limite vindo de `settings`, janela de horário real: 19h seg-sáb, 13h domingo, dos requisitos), usada no mapa, no detalhe e na lista, mais um **contador no topo da lista** ("N ligados · M sem sinal · K em repouso") calculado pela MESMA função do mapa. Os dois números passam a bater por construção, não por coincidência. O amarelo "só por rede" continua como aviso de qualidade, sem mudar a contagem. Por ser só front-end do painel, publica pelo GitHub sem gastar crédito de build do Lovable.
+
+
+---
+
+## 18. Caso Kamilla (03/10) — deslocamento real sem nenhum aviso no painel
+
+**Fato (dado ao vivo, projeto a82cd32f):** o terminal de teste (IMEI 354015117066357) entrou na frota como "Kamilla" em 03/10. Trajeto real, só leituras GPS com precisão de 1 a 9 m:
+- 09:40-10:20 UTC: ponto de origem (-7.2056, -35.8854), parado.
+- 12:20-13:20 UTC: segunda parada (-7.2017, -35.8846), a 447 m da origem. Eventos "boot" às 09:34, 09:42 e 10:44 (hora local).
+- 13:40 UTC em diante: ponto final (-7.2262, -35.9213), a 4.888 m da parada, 4.583 m da origem.
+
+**Causa raiz: Kamilla não tem registro em `geofences` (n_geofences = 0).** O gatilho `check_geofence_on_location_update` só avalia terminais que tenham geofence; sem ela, não existe "ponto" para sair, e nada dispara. O gatilho não falhou, ele nunca foi chamado para essa lógica.
+
+**Problema maior, mesmo defeito em escala:** 28 dispositivos no painel, só 19 geofences. 9 terminais sem ponto cadastrado, ou seja, sem nenhuma vigilância de "saiu do ponto":
+Kamilla (03/10), Kelly Conceição (23/09), Emilly (08/09), Gisele (11/09), Bia salao (17/09), Skarlet (23/09), Jeferson (22/09), Rayane (23/09), Kelly 40 (09/09).
+Todos foram criados depois da carga única de geofences feita em 16/09. Terminal novo nunca ganha ponto automático.
+
+**Movimento medido nos 7 sem ponto (3 dias, só GPS com precisão ≤ 30 m):** Emilly tem 640 m de diagonal em 462 leituras (precisa de análise: movimento real ou ruído). Rayane 119 m, Jeferson 103 m, Gisele 63 m (só 2 leituras), Skarlet 39 m, Kelly Conceição 30 m (2 leituras), Kelly 40 sem dado suficiente.
+
+**Outros achados na mesma consulta:**
+- Campo `devices.status` não é confiável: Bia salao aparece "online" com último sinal em 26/09. O painel usa o cálculo por tempo, mas o campo gravado no banco está obsoleto.
+- Kamilla ficou ~2 h sem leituras (10:20-12:20 UTC) durante o transporte; o desligar/ligar deixa eventos "boot", e dois deles (09:34 e 10:44 local) vieram com "localização não disponível".
+
+**Correção proposta (NÃO aplicada, aguarda validação no teste virtual):**
+1. Ponto automático: terminal sem geofence ganha ponto provisório após um período estável (ex.: 2 h parado, GPS ≤ 30 m).
+2. Mesmo sem ponto, deslocamento maior que 250 m gera evento "deslocamento sem ponto cadastrado" visível no painel.
+3. Fixar o ponto definitivo na regra de mudança de ponto da seção 16 (um dia de funcionamento completo, histórico "mudou de ponto de X para Y").
+4. Alerta no painel para qualquer terminal sem ponto cadastrado.
