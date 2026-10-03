@@ -500,3 +500,25 @@ Todos foram criados depois da carga única de geofences feita em 16/09. Terminal
 3. Gatilho AFTER INSERT em `locations` (avalia a leitura recém-gravada, sem busca), para fechar o buraco da ordem de gravação, validado no teste virtual com a saída de 01/10 da Vanessa e a viagem da Kamilla como casos reais.
 4. Mudança de ponto automática (seção 16) usa a mesma regra de 2 dias.
 5. Publicação: mudanças de banco valem imediatamente (painel lê o banco ao vivo); mudanças de tela vão por push no repo `wallacy-adm/gps-cg` e só contam como entregues depois de conferir `latest_commit_sha` no Lovable novo e publicar.
+
+
+---
+
+## 20. Correção aplicada: ponto da Graciane (03/10) + caso Emilly + limites reais
+
+**APLICADO EM PRODUÇÃO (única mudança do dia, com confirmação do Wallacy de que o local de trabalho da Graciane é (-7.2437, -35.8791)):**
+- Tabela `geofences`, linha da Graciane: ponto antigo (-7.20579667, -35.885455) trocado por (-7.24378667, -35.87909667), mediana de 1.301 leituras GPS com precisão ≤ 5 m desde 29/09. Raio 250 m mantido.
+- `devices` da Graciane: `outside_geofence` = false, `geofence_breach_streak` = 0 (confirmado no retorno do UPDATE).
+- Para desfazer: voltar lat/lng para os valores antigos acima. Não existe tabela de histórico de pontos ainda; este registro é o histórico.
+
+**Caso Emilly (03/10), "primeira abertura não bate com o ponto de venda":**
+- Cluster de trabalho: (-7.2289, -35.9044), horário comercial, 285 e 292 leituras GPS em 02/10 e 03/10.
+- 03/10, trajeto real, só GPS: 07:37 a 412 m do cluster (precisão 14 m), 07:39 a 290 m, 07:40 a 281 m, e 07:43 já no cluster a 27 m. Deslocamento de ~255 m em 2 min 40 s, ~1,6 m/s, velocidade de caminhada. Não é erro de GPS: o terminal foi ligado a ~400 m do ponto e **levado a pé até a loja**.
+- Até 01/10 a Emilly reportava 99% por REDE (acc 11 a 200 m, muitas leituras repetidas no mesmo ponto de torre). Nesses dias o sistema não tinha como saber onde ela estava com exatidão; só passou a ter GPS em 02/10. Ou seja, "no ponto" para ela, antes de 02/10, era estimativa.
+- Isso confirma o limite estrutural da seção abaixo.
+
+**Limites reais (honestos):**
+1. Posição por rede (cell/Wi-Fi) tem erro de 150 a 200 m, do tamanho do raio de 250 m. Quando o terminal só tem rede, "no ponto" e "fora do ponto" não podem ser exatos. O painel precisa mostrar o nível de confiança (GPS confirmado / só rede / sem dado), nunca fingir certeza.
+2. Terminais que quase não reportam (Vanessa 25 leituras GPS em 10 dias, Angelica 4 em 7, Jaqueline 3, Ketyllen 5, Roberta 8, Kelly bar moela 8): sem dado não existe vigilância. Só resolve com o app novo e inspeção física (restrição de bateria / autostart).
+3. O defeito de ordem de gravação do app 2.0.25 continua em campo; o gatilho novo em `locations` fecha o buraco do lado do servidor (validar no teste virtual antes de aplicar).
+4. Custo: o plano free do Lovable bloqueia as consultas do MCP por tempo depois de certo número de ações (bloqueio de ~40 min ocorreu duas vezes em 03/10) e a Cloud tem 20 créditos/mês; a economia real do índice só será medida no print do Cloud > Usage de 04/10 à noite.
