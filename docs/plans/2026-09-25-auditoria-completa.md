@@ -468,3 +468,35 @@ Todos foram criados depois da carga única de geofences feita em 16/09. Terminal
 2. Mesmo sem ponto, deslocamento maior que 250 m gera evento "deslocamento sem ponto cadastrado" visível no painel.
 3. Fixar o ponto definitivo na regra de mudança de ponto da seção 16 (um dia de funcionamento completo, histórico "mudou de ponto de X para Y").
 4. Alerta no painel para qualquer terminal sem ponto cadastrado.
+
+
+---
+
+## 19. Graciane "fora do ponto" sem ter saído + auditoria de todos os pontos (03/10, dado ao vivo)
+
+**Pergunta do Wallacy:** por que a Graciane aparece fora do ponto se ela não saiu? Precisa ser exato.
+
+**Achado 1: o PONTO cadastrado da Graciane está errado, o terminal não saiu.**
+- Ponto cadastrado (geofences, definido em 18/09): (-7.20580, -35.88546), raio 250 m.
+- Posição real ao vivo (03/10 16:39 BRT): (-7.24372, -35.87907), a 4.276 m do ponto. 1.307 leituras GPS em 7 dias, 0 dentro do raio.
+- Histórico: só 3 dias com leitura dentro do ponto cadastrado (17/09 das 14:24 às 20:21 e 20/09 das 14:10 às 14:25, ~60 leituras); 7 dias fora. De 23/09 em diante TODAS as leituras estão em (-7.244, -35.879), em horário comercial (07:30 às 17:00), em 23/09, 29/09, 30/09, 01/10, 02/10 e 03/10, centenas por dia, precisão 1 a 3 m.
+- O ponto cadastrado fica a ~20 m de onde o terminal de teste (Kamilla) ficou ligado ao PC do Wallacy em 03/10 (-7.2056, -35.8854). Leitura mais provável: o ponto foi gravado a partir do dia de instalação/configuração (17/09), quando o terminal ainda estava no local de preparo, e nunca foi corrigido.
+- **Causa do alerta:** o gatilho está certo; o ponto é que foi construído a partir de UM único dia de dados. Em 18/09 a carga única de geofences usou a mediana das leituras disponíveis; para terminal com 1 dia de histórico, isso fixa o ponto no local de configuração.
+- **Falta confirmar com o Wallacy:** que a loja da Graciane fica de fato em (-7.2437, -35.8791). Nenhuma alteração feita em produção.
+- Isso também reabre a leitura do caso de 23/09 ("4 km fora, 18 leituras GPS"): a posição de 23/09 é a MESMA do ponto atual. Ou 23/09 foi no local certo e a manutenção foi no ponto de preparo, ou o contrário. Só o Wallacy confirma.
+
+**Achado 2: auditoria dos 19 pontos cadastrados (todas as leituras GPS ≤ 30 m, histórico completo).**
+- 17 de 19 têm 82 a 100% das leituras dentro do raio e mediana a menos de 35 m do centro: pontos coerentes.
+- Graciane: 4% dentro (ponto errado, acima).
+- Angelica: ponto antigo, terminal mudou de lugar (caso já documentado, depende da regra de mudança de ponto).
+- **Vanessa: SAÍDA REAL SEM AVISO.** Em 01/10 o terminal ficou ~1 h a ~2,3 km do ponto (06:09 às 07:02 BRT, 18 leituras GPS de 7 a 14 m, dois eventos "boot" 06:08 e 06:55), e voltou ao ponto às 07:09. O campo `outside_geofence` ficou false e **não existe evento left_geofence** na tabela `events`. É o mesmo defeito da ordem de gravação (seção 2.x), depois da correção do gatilho de 22/09: o gatilho não encontra a leitura em `locations` no instante da atualização de posição.
+- Vanessa reporta muito pouco (25 leituras GPS em 10 dias, quase só no boot da manhã), o que torna a vigilância ainda mais frágil.
+
+**Achado 3: terminal sem ponto (Kamilla e mais 8, ver seção 18).** Emilly (terminal fixo, confirmado pelo Wallacy): últimos 2 dias estáveis em (-7.229, -35.904), 224 e 285 leituras em horário comercial; a diagonal de 640 m vista em 3 dias vem de leituras dispersas de 30/09 e 01/10, ainda não caracterizadas.
+
+**Regras novas decorrentes (propostas, NÃO aplicadas):**
+1. Um ponto nunca pode ser definido ou trocado com menos de 2 dias de funcionamento completo no mesmo local (cluster de horário comercial).
+2. Ponto provisório automático só vira definitivo depois de 2 dias de funcionamento; até lá o painel mostra "ponto em aprendizado", nunca "no ponto" nem "fora do ponto".
+3. Gatilho AFTER INSERT em `locations` (avalia a leitura recém-gravada, sem busca), para fechar o buraco da ordem de gravação, validado no teste virtual com a saída de 01/10 da Vanessa e a viagem da Kamilla como casos reais.
+4. Mudança de ponto automática (seção 16) usa a mesma regra de 2 dias.
+5. Publicação: mudanças de banco valem imediatamente (painel lê o banco ao vivo); mudanças de tela vão por push no repo `wallacy-adm/gps-cg` e só contam como entregues depois de conferir `latest_commit_sha` no Lovable novo e publicar.
