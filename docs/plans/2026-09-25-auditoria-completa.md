@@ -410,3 +410,33 @@ Detalhes em aberto: definição exata de "um dia"; adoção automática ou com c
 
 ### 16.2 Suspeita de bug no mapa
 Wallacy acredita que o mapa mostra a quantidade de terminais "ligados" vinda da aba Dispositivos. Possível ligação com a divergência `deviceHealth` (mapa) x `connState` (lista) da seção 14. Aguardando os números/print que ele vê em cada tela antes de analisar.
+
+### 16.3 Decisões do Wallacy (03/10) sobre a mudança de ponto
+1. "Um dia" = um **dia de funcionamento completo**: o terminal reportando de dia (janela ativa) dentro de 250 m do lugar novo, sem voltar ao ponto antigo. A noite em silêncio não atrapalha.
+2. Adoção **automática**; o histórico guarda "mudou de ponto: de X para Y, em data".
+3. Enquanto espera o dia, o alerta "saiu do ponto" **continua visível**; só some quando a adoção acontece.
+4. A regra vale **também para terminais que já estão em outro lugar** (ex.: Angelica, fora desde 22/09). Ao entrar no ar, ela passa a ter o ponto novo.
+Em aberto: o Wallacy não respondeu se algum terminal deve ficar de fora da adoção retroativa (a Graciane estava em manutenção; hoje há um terminal novo sem nome no ponto dela, ver 17.4).
+
+---
+
+## 17. BUG DO CONTADOR "ONLINE": MAPA 5 x DISPOSITIVOS 6 (03/10) — confirmado, causa exata
+
+### 17.1 Relato
+Mapa mostra "5 online"; na aba Dispositivos aparecem 6 online. Wallacy: "num sistema integrado não pode ter essa diferença, é erro". Correto.
+
+### 17.2 Causa (código lido: `index.tsx`, `devices.index.tsx`, `fleet.ts`)
+Dois contadores, duas regras, sem nada em comum:
+- **Mapa** (`index.tsx`): `online = devices.filter(deviceHealth !== "offline")`. `deviceHealth` exige `status==='online'` E última leitura há **menos de 5 minutos fixos**. Sem janela de horário. Terminal só com rede (amarelo) conta como online.
+- **Dispositivos** (`devices.index.tsx`): não tem contador; as linhas mostram "Ligado/Sem sinal/Em repouso" por `connState`, com limite de `settings.offline_threshold_minutes` (**15 minutos**) e com janela de horário. O Wallacy conta as linhas "Ligado".
+Qualquer terminal entre 5 e 15 minutos sem reportar é "Ligado" na lista e "offline" no mapa.
+
+### 17.3 Prova ao vivo (03/10 07h08 BRT, dentro da janela)
+7 terminais com leitura na última hora. Menos de 5 min: Luana centro, Roberta, Vanessa, Noemia e o terminal sem nome = **5** (valor do mapa). **Naiane com 14,9 min** = "Ligado" na lista (limite 15) e "offline" no mapa (limite 5) = **6** (valor da lista). Reproduz exatamente o 5 x 6 relatado. Angelica, a 38,7 min, é "Sem sinal" nas duas telas.
+Efeito colateral do mesmo código: o mapa conta "em repouso" como offline (vermelho), então à noite toda a frota aparece "offline" no mapa.
+
+### 17.4 Terminal novo sem nome no painel (achado de passagem)
+Cadastrado hoje 03/10 06h44 BRT, IMEI 354015117066357, app 2.0.25, posição a ~10 m do ponto cadastrado da Graciane e com o mesmo prefixo de IMEI dela (354015...). Não é o L3 do cabo. Pode ser terminal substituto ou o da Graciane de volta com outro chip, **não confirmado**. Precisa de nome.
+
+### 17.5 Correção proposta (NÃO aplicada)
+Uma única função de status para o painel inteiro (limite vindo de `settings`, janela de horário real: 19h seg-sáb, 13h domingo, dos requisitos), usada no mapa, no detalhe e na lista, mais um **contador no topo da lista** ("N ligados · M sem sinal · K em repouso") calculado pela MESMA função do mapa. Os dois números passam a bater por construção, não por coincidência. O amarelo "só por rede" continua como aviso de qualidade, sem mudar a contagem. Por ser só front-end do painel, publica pelo GitHub sem gastar crédito de build do Lovable.
