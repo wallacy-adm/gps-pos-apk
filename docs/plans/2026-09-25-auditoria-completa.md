@@ -394,3 +394,19 @@ Método: baixei o APK do release oficial v2.0.25 (hash `59606D56...`, DIFERENTE 
 - Pontos de atenção do `service.sh` (leitura do código + teste): o laço verifica o mesmo arquivo em `/data/user/0` e `/data/data`, que são o mesmo diretório (inofensivo); se `pm install` falhar, tenta de novo a cada 5 min sem limite (inofensivo, mas enche o log); o log nunca é apagado. Não é risco, só higiene.
 - Limpeza feita no aparelho: removidos `update_test.apk`, `stage_update.sh`, `_t`. O L3 ficou com o app atualizado por cima do de sistema (mesma versão), como ficará a frota real.
 - Observação de método (erro meu): o 1º staging falhou porque o PowerShell removeu as aspas internas do `su -c "..."`, rodando só o 1º comando como root. Corrigido usando script. Registro porque afetaria qualquer teste futuro por adb.
+
+---
+
+## 16. REQUISITOS NOVOS DO WALLACY (02/10) — pendentes de detalhes, NADA implementado
+
+### 16.1 Mudança de ponto de venda (a cerca deve se ajustar sozinha)
+Pedido textual: o ponto de venda de um terminal deve ser definido pelo tempo que ele passa ligado num lugar. Hoje a cerca é fixa: o terminal da Angelica foi levado pra outro ponto de venda e ficaria "fora do ponto" pra sempre. Regra pedida:
+1. O terminal sai do ponto: o sistema avisa.
+2. Se não volta e fica **fixo em outro lugar por pelo menos um dia, ligado e funcionando normalmente**, esse lugar vira o novo ponto de venda dele.
+3. Quando isso acontece, a mensagem "saiu e não voltou do ponto" **desaparece**.
+Efeito no código: o gatilho/RPC de geofence passa a ter um estado de "candidato a novo ponto" e uma regra de adoção; a tabela `geofences` precisa guardar histórico (ponto antigo, ponto novo, data da adoção). Vai junto com o desenho do `report_position` (seção 15.4).
+Riscos levantados (a discutir): (a) terminal levado por furto que fique parado na casa do ladrão por um dia seria "adotado" e o alerta sumiria; (b) terminal em manutenção (caso Graciane, 23-24/09) idem. Mitigação proposta: o alerta sai do painel, mas o histórico guarda "mudou de ponto: de X para Y".
+Detalhes em aberto: definição exata de "um dia"; adoção automática ou com confirmação; se aplica retroativamente à Angelica (parada em outro lugar desde 22/09).
+
+### 16.2 Suspeita de bug no mapa
+Wallacy acredita que o mapa mostra a quantidade de terminais "ligados" vinda da aba Dispositivos. Possível ligação com a divergência `deviceHealth` (mapa) x `connState` (lista) da seção 14. Aguardando os números/print que ele vê em cada tela antes de analisar.
