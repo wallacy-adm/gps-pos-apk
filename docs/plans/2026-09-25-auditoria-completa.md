@@ -346,3 +346,51 @@ Como medir quando o banco responder: `pg_stat_statements` (extensão já instala
 
 ### 15.6 O que faltou nesta sessão (registro)
 Eu mexi no banco e no painel por semanas sem nunca abrir Usage nem estimar custo de Cloud. Esse era o ponto cego. Corrigido a partir de agora: item 15.4.8 e 15.4.9.
+
+### 15.7 Medição feita em 02/10 (banco voltou a responder; consultas pequenas, de propósito)
+- Banco no ar: Angelica, Roberta e Kelly Conceição reportaram há ~10 segundos às 07h20 BRT. A instância do banco reiniciou em 01/10 22h48 UTC (estatísticas zeradas nesse minuto), compatível com retomada depois da pausa. Não confirmei QUEM retomou (renovação da cota ou ação manual).
+- **ACHADO PRINCIPAL: `locations` não tem índice nenhum além da chave primária** (`pg_indexes`: só `locations_pkey`). `devices` tem `id` e `serial`; `events` só `id`.
+- **Prova com `EXPLAIN`** da busca que o gatilho de geofence faz a cada atualização de terminal: **Parallel Seq Scan em `locations`**, custo estimado ~16.700, lendo a tabela inteira (380 mil+ linhas e crescendo) toda vez. Com índice em `(device_id, recorded_at)` a mesma busca custa uma fração disso. Essa busca roda a cada heartbeat de cada terminal (~16 mil por dia). As consultas do painel (`ORDER BY recorded_at DESC LIMIT 2000`, 24h por terminal) também varrem a tabela. É a hipótese 2 do item 15.3, agora com evidência direta, e é a candidata mais forte pros 96% de "Database server".
+- Efeito colateral importante: o custo por escrita cresce junto com a tabela. Isso explica por que o gasto subiu de ~0,07 pra ~1,95 por dia conforme `locations` passou de milhares pra centenas de milhares de linhas, e por que continuaria subindo sozinho.
+- Requisições desde o reset (01/10 19h48 BRT até 02/10 07h20, quase tudo madrugada): 5.212 chamadas de API, ~450/hora fora do horário de uso. A taxa em horário comercial precisa ser medida de dia.
+- **Correção proposta (NÃO aplicada, aguarda OK do Wallacy)**: `CREATE INDEX locations_device_recorded_idx ON locations (device_id, recorded_at DESC);`. Muda o banco de produção, é aditivo (não apaga nem altera dado), custo único pequeno. Depois: medir de novo o consumo diário por 2 a 3 dias antes de decidir os outros cortes da 15.4.
+
+### 15.8 Terminal Positivo L3 ligado por cabo (02/10 07h19 BRT) — primeira leitura de campo com Magisk funcionando
+Só leitura, nada alterado no aparelho.
+- Android **7.1.1**, modelo L3. App `com.system.posservice` v2.0.25 (versionCode 42) instalado como **app de sistema privilegiado** em `/system/priv-app/GPSPosService`; `magiskd` e `magisk:root` rodando. **O módulo Magisk, que estava bloqueado desde 22/09, agora funciona nesse aparelho.**
+- `/data/local/tmp/gps_updater.log` mostra "watcher iniciado" 3 vezes (01/10 16h14, 01/10 19h34, 02/10 07h14), uma por boot. **A 1ª metade da cadeia de atualização silenciosa (script de root sobe a cada boot) está confirmada em aparelho real.** A 2ª metade (achar o APK, `pm install -r`, log "instalado com sucesso") ainda NÃO foi testada.
+- No boot de 02/10, o sistema iniciou o app pelo `BootReceiver` (07h17:17) e o log mostra `GpsLocationService: GPS_PROVIDER iniciado`. A cadeia de boot funciona.
+- **Correção sobre a hipótese "Restrito" (item 2.6):** Android 7.1.1 não tem os níveis de bateria Ilimitado/Otimizado/Restrito (isso é do Android 9+). Neste aparelho: `RUN_IN_BACKGROUND: allow` (appops), política de rede do app sem restrição (`dumpsys netpolicy`: sem "restrict background", UID do app com regra NONE). **A configuração "não trabalhar em segundo plano" NÃO está ativa nesse L3.** Isso vale só pra este aparelho, que acabou de ser instalado; os terminais parados (Angelica etc.) não foram inspecionados e podem ser outros modelos/Android.
+- Fora da lista de exceção de Doze (`deviceidle whitelist` vazia), mas o aparelho estava carregando por USB (Doze só atua com aparelho desconectado e parado; terminal de balcão na tomada raramente entra nele).
+- Aparelho sem Google Play Services (`requires the Google Play Store, but it is missing`): o app usa só o `LocationManager` do Android. Esperado, sem ação.
+- Terceiro app instalado: `cambistamobile` (da operação do ponto), irrelevante pro projeto.
+
+### 15.9 Índice criado em produção (02/10, autorizado pelo Wallacy)
+- Aplicado: `CREATE INDEX locations_device_recorded_idx ON public.locations (device_id, recorded_at DESC);` Sem erro, `rows: []`.
+- Verificado com `EXPLAIN` na mesma busca do gatilho de geofence: antes **Parallel Seq Scan, custo ~16.737**; depois **Index Scan using locations_device_recorded_idx, custo ~3,78**. Redução de mais de 4.000x por busca.
+- Falta medir o efeito real no consumo: olhar Cloud > Usage em 2 a 3 dias. Meta de outubro: ≤0,65 crédito/dia (hoje ~1,95).
+- Não resolve sozinho a causa de ORDEM do gatilho (seção 12); só barateia cada execução.
+
+### 15.10 Angelica "fora do ponto" (analisado 02/10): o painel está CERTO, o terminal está mesmo fora
+- Ponto cadastrado: -7.22488, -35.89204. Último GPS (02/10 15h43 BRT, precisão 7,4m): -7.23589, -35.89059 = **~1.230m ao sul**.
+- 17/09: 186 leituras, todas a no máximo 128m do ponto (mediana do GPS 18m). Desde 22/09: GPS e rede concordam em ~1.210 a 1.255m, todos os dias com dado (22/09, 23/09, 30/09, 01/10, 02/10). Posição estável por 10 dias, não é ruído.
+- Único evento: `left_geofence` em 22/09 14h12. Nunca houve `entered_geofence`. `outside_geofence=true`, streak 0.
+- Conclusão: o terminal mudou de lugar em 22/09 e ficou lá. Hipóteses a confirmar com a Angelica: (a) ela mudou o ponto de venda, então a cerca deve ser recadastrada no endereço novo; (b) alguém levou o terminal pra outro lugar. Os 7 dias de silêncio (23/09 a ~30/09) começaram logo depois da mudança.
+- Ressalva técnica: se ela voltasse ao ponto, o evento "voltou" também sofreria o bug da seção 12.1 (a busca do gatilho falha, então `outside_geofence` não limparia). Não aconteceu neste caso, então é inferência do código e não foi observado.
+
+### 15.11 O L3 do cabo não aparece no painel: não é bug, é falta de internet
+- `devices` não tem nenhum registro criado depois de 23/09 e nenhuma linha com o serial do L3 (`4AG483D6O`).
+- No aparelho: chip **ausente** (`gsm.sim.state=ABSENT`), Wi-Fi ligado mas sem rede conectada, `ping` retorna "Network is unreachable", `Active default network: none`. Ele nunca conseguiu mandar nem um sinal, então nunca se cadastrou.
+- Para aparecer no painel: dar internet (Wi-Fi ou chip) E esperar a janela ativa. O código só envia entre 6h30 e 20h (hoje até 20h, a janela de 19h combinada ainda não foi corrigida, item 2.4), e sem GPS fixo dentro de casa o primeiro envio depende do heartbeat de reserva (a cada hora).
+
+### 15.12 TESTE DO WATCHER DE ATUALIZAÇÃO SILENCIOSA (02/10, L3 real, Android 7.1.1, root Magisk)
+Método: baixei o APK do release oficial v2.0.25 (hash `59606D56...`, DIFERENTE do APK embutido no módulo, `1E8AF618...`, mas mesmo tamanho, 29.542.156 bytes), coloquei em `/data/data/com.system.posservice/files/update_ready.apk` como root (script, dono do app), e acompanhei o log.
+- 20h01m39 APK colocado. 20h01m42 **watcher achou** (3s). 20h01m51 `pm install -r` retornou **Success**, log "instalado com sucesso", arquivo apagado.
+- **Assinatura compatível:** o APK do release (hash diferente do instalado) foi aceito como atualização. Isso mostra que o CI assina com a mesma chave a cada build, e que o hash muda por reconstrução, não por troca de chave.
+- Estado depois: `UPDATED_SYSTEM_APP`, `PRIVILEGED` mantido, `codePath=/data/app/com.system.posservice-1`, copia de sistema preservada em `/system/priv-app`. versionCode 42, instalado sem nenhum toque.
+- **Lacuna confirmada em aparelho real:** o Android força parada do app na instalação. O processo voltou em 1s (disparado pelo `TaskBroadcastReceiver` do Expo), mas o **GpsLocationService NÃO voltou**: `dumpsys activity services` vazio e sem pedido de GPS ativo. O serviço só retornou às 20h04m25, quando o alarme `BACKUP_PING` disparou e o `AlarmReceiver` religou (`GPS_PROVIDER iniciado`). **Janela sem rastreio: 2 min 34 s nesse teste.** Tempo observado uma vez; depende do intervalo do alarme.
+- Consequência: adicionar `MY_PACKAGE_REPLACED` ao `BootReceiver` (item 9.2) continua valendo, agora com evidência: encurta a janela sem rastreio de ~2,5 min pra poucos segundos. Não é mais hipótese.
+- Dois caminhos de atualização existem, com mensagens diferentes: (1) terminal com Magisk: silenciosa, sem aviso, serviço volta sozinho; (2) terminal sem root (ex.: CIE2020): `PackageInstaller` com toque, e aí vale o aviso "Atualização concluída, reinicie o terminal." (seção 10).
+- Pontos de atenção do `service.sh` (leitura do código + teste): o laço verifica o mesmo arquivo em `/data/user/0` e `/data/data`, que são o mesmo diretório (inofensivo); se `pm install` falhar, tenta de novo a cada 5 min sem limite (inofensivo, mas enche o log); o log nunca é apagado. Não é risco, só higiene.
+- Limpeza feita no aparelho: removidos `update_test.apk`, `stage_update.sh`, `_t`. O L3 ficou com o app atualizado por cima do de sistema (mesma versão), como ficará a frota real.
+- Observação de método (erro meu): o 1º staging falhou porque o PowerShell removeu as aspas internas do `su -c "..."`, rodando só o 1º comando como root. Corrigido usando script. Registro porque afetaria qualquer teste futuro por adb.
