@@ -576,3 +576,19 @@ Todos foram criados depois da carga única de geofences feita em 16/09. Terminal
 - O trabalho por requisição cai já com o gatilho v3: ele retira o gatilho do UPDATE em `devices` (S10b: o v3 custa +0,08 ms por leitura). HIPÓTESE (não provada): o crédito acompanha esse trabalho. Teste: aplicar o v3 e comparar o Usage por 2 dias.
 - Kelly Conceição reportando 24 h: terminal a visitar (silêncio noturno não pega nela).
 - Pontos de controle: print do Usage em 07/10 e 08/10. Se ainda > 1,2/dia em 09/10, decidir entre plano pago + top-up ou pausar com `tracking_enabled=false`.
+
+---
+
+## 23. Por que o terminal envia a cada ~30 s se o combinado era de hora em hora (05/10/2026) — causa lida no código
+
+Fonte: `plugins/with-boot-receiver.js` (GpsLocationService), v2.0.25.
+- **O "1 hora" existe só no batimento de reserva** (`HEARTBEAT_INTERVAL_MS = 1h`, linhas ~1205 e ~1443) — a rede de segurança que reenvia o último fix se nada foi enviado nos últimos 25 s.
+- **O envio principal NÃO obedece a isso.** `onLocationChanged` (linhas ~1290–1370) manda TODO fix aceito para o servidor (`new Thread(() -> sendToSupabase(loc)).start()`), sem limite de distância (`MIN_DIST_M = 0f`) e sem limite de tempo além do pedido ao Android (GPS a cada 30 s, rede a cada 15 s: `MIN_TIME_MS`, `NET_TIME_MS`).
+- **A janela de silêncio nunca vale nesse caminho:** `isActiveWindow()` só é chamada em UM lugar (linha ~1460, o batimento). `onLocationChanged` não verifica horário nem dia da semana. Por isso o terminal "dorme" à noite só se o Android parar de entregar fixes (ou o aparelho desligar); onde o ouvinte continua vivo (Kelly Conceição agora; Nicole, Noemia, Bia ramadinha e Luana em setembro), ele envia 24 h por dia.
+- Janela do batimento: fim às 20h (deveria ser 19h) e sem exceção de domingo.
+- A economia de dados prometida (parado = quase nada, movimento = reporta) foi projetada mas nunca implementada em nenhuma versão (ver 22/09 na memória do projeto). Isso é causa comum do consumo dos chips (20 MB) e dos créditos do Lovable.
+
+### Requisito fechado para a v2.0.26 (planejamento, sem código ainda)
+1. Mover o filtro para DENTRO do `onLocationChanged`: só envia se (a) mudou mais que um limiar de distância desde o último envio, ou (b) passou o intervalo de sinal de vida (1x/hora), ou (c) mudou o estado de ponto.
+2. A janela (seg–sáb 06:30–19:00, domingo 06:30–13:00) vale para TODOS os caminhos de envio, não só o batimento.
+3. Parar de pedir fix a cada 15–30 s fora da janela (desregistrar o ouvinte), o que também economiza bateria.
