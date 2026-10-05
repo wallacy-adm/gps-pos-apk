@@ -549,3 +549,30 @@ Todos foram criados depois da carga única de geofences feita em 16/09. Terminal
 - Plano de desfazer: recriar o gatilho antigo `trg_check_geofence` (definição guardada em `schema_real.sql`) e `DROP TRIGGER trg_eval_location_v3`.
 - Custo: medir após aplicar (escritas em `devices` só quando o estado muda).
 - Privacidade: o repositório é PÚBLICO; rastros GPS reais (`prod_outside_data.py`, `real_data_v3.py`) ficam só locais (.gitignore). `real_data.py` (versionado antes) contém coordenadas reais de incidentes — decisão do Wallacy sobre limpar o histórico.
+
+---
+
+## 22. Medição de créditos de 05/10/2026 (print Cloud > Usage + pg_stat_statements) — o índice NÃO resolveu
+
+### 22.1 O que o print mostra (21/09 a 05/10: 16 run credits; Database server 15,7; Network 0,23; Compute 0,11; AI/Connectors 0)
+- Diário aprox.: 21–23/09 1,1–1,3 · 24–26/09 1,95 · 27/09 1,0 · **28–30/09 zero (cota esgotada, sistema parado)** · 01/10 1,2 · 02/10 1,1 · **03/10 1,95 · 04/10 1,7**.
+- Outubro: ~6 créditos em 4 dias. Mantido o ritmo, a cota de 20 acaba por volta de **12–14/10** e o backend pausa até o dia 1º. Meta de 0,65/dia NÃO atingida.
+- O índice (02/10) não derrubou o consumo; 03 e 04/10 (sábado e domingo) foram os dias mais altos. Parte pode ser a análise feita por mim nesses dias, mas o pg_stat mostra que ela é pequena (~20 s de banco).
+
+### 22.2 O que o banco mostra (pg_stat_statements desde 01/10 22:47 UTC, ~4 dias)
+- 82.913 upserts em `devices` (heartbeat), média 18,62 ms = **1.544 s (89% do tempo de banco)**.
+- 82.769 inserts em `locations`, média 1,51 ms = 125 s.
+- Painel: 56 chamadas da consulta de provedores, 741 ms = 41 s -> **o painel não é o problema**.
+- Total ~1.730 s em 4 dias. O upsert em `devices` é 12x mais lento que o insert em `locations`: é o gatilho antigo rodando dentro dele.
+- Tráfego: 28.147 leituras em 24 h, 22 terminais. Horário comercial: 1.650–2.690 leituras/h (19–22 terminais) = cada terminal envia a cada ~35 s (MIN_DIST_M = 0). **Madrugada: 1 terminal só, Kelly Conceição (v2.0.25), ~177 leituras/h = ~4.300/dia (~15% do tráfego).**
+
+### 22.3 Como o Lovable cobra (docs.lovable.dev/features/project-usage e /introduction/credits-and-usage)
+- "Database server" = tamanho da instância x tempo ativa x tráfego/consultas. Plano free já está no menor tamanho (Tiny), sem como baixar.
+- Cota de Cloud é 20/mês em TODOS os planos (Free, Pro, Business). Sem crédito, o backend pausa (dados ficam salvos). Cloud não se compra separado: top-up geral Pro US$ 15 por 50 créditos; plano free não compra top-up.
+- Os apps instalados só leem `tracking_enabled` do latest.json (tudo ou nada). **Não existe controle remoto de intervalo nem de distância mínima nos terminais atuais.**
+
+### 22.4 Conclusão e hipóteses (marcadas como hipótese)
+- O volume de requisições (~21 mil heartbeats/dia) só cai com a v2.0.26 (limiar de movimento + janela 19h/domingo 13h + conexão reaproveitada). Estimativa: de ~25 mil para algumas centenas por dia.
+- O trabalho por requisição cai já com o gatilho v3: ele retira o gatilho do UPDATE em `devices` (S10b: o v3 custa +0,08 ms por leitura). HIPÓTESE (não provada): o crédito acompanha esse trabalho. Teste: aplicar o v3 e comparar o Usage por 2 dias.
+- Kelly Conceição reportando 24 h: terminal a visitar (silêncio noturno não pega nela).
+- Pontos de controle: print do Usage em 07/10 e 08/10. Se ainda > 1,2/dia em 09/10, decidir entre plano pago + top-up ou pausar com `tracking_enabled=false`.
