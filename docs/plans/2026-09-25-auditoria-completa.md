@@ -522,3 +522,30 @@ Todos foram criados depois da carga única de geofences feita em 16/09. Terminal
 2. Terminais que quase não reportam (Vanessa 25 leituras GPS em 10 dias, Angelica 4 em 7, Jaqueline 3, Ketyllen 5, Roberta 8, Kelly bar moela 8): sem dado não existe vigilância. Só resolve com o app novo e inspeção física (restrição de bateria / autostart).
 3. O defeito de ordem de gravação do app 2.0.25 continua em campo; o gatilho novo em `locations` fecha o buraco do lado do servidor (validar no teste virtual antes de aplicar).
 4. Custo: o plano free do Lovable bloqueia as consultas do MCP por tempo depois de certo número de ações (bloqueio de ~40 min ocorreu duas vezes em 03/10) e a Cloud tem 20 créditos/mês; a economia real do índice só será medida no print do Cloud > Usage de 04/10 à noite.
+
+---
+
+## 21. Gatilho de geofence v3 — validado no teste virtual (04–05/10/2026). NADA aplicado em produção.
+
+### 21.1 Resultado
+- `tests/virtual_test/schema_v3.sql` (gatilho AFTER INSERT em `locations`) + `test_v3.py`: **47 testes, 47 passaram**, repetido 4x seguidas (sem deadlock; único aviso no log é o teste proposital que força erro para provar que o gatilho nunca bloqueia a gravação).
+- Replay do histórico real da frota (12 terminais, leituras GPS <= 30 m fora do raio): **8 saídas reais detectadas, 0 falsas**. Bia, Luana e Jessica = 0 alertas (eram os falsos da regra anterior). Saídas: Angelica 22/09, Graciane 17/09 e 24/09 (+ volta 23/09), Jessica fruta 10/09, Nicole 11/09, Noemia 18/09 (20 min estável a 277–361 m, depois voltou), Vanessa 01/10 (a saída que a produção perdeu), Vitória 15/09.
+- Prova do defeito antigo: o gatilho em produção (BEFORE UPDATE em devices) procura a leitura na tabela `locations` antes de ela existir (o app grava devices primeiro) -> 0 alertas. O v3 avalia a leitura recém-gravada.
+
+### 21.2 Regras (resumo)
+- Só GPS com precisão <= 30 m decide; rede nunca decide. Saída = parado fora (3+ leituras coerentes em 3+ min, ou 2 em 30+ min), ou longe e em movimento (4+ leituras a > 2x o raio em 3+ min), ou 1 leitura <= 3 m a > 2x o raio. Volta = 2 leituras dentro.
+- Ponto `locked` nunca muda sozinho; `must_stay` (Emilly) alerta com 3 leituras fora em 3+ min.
+- Sem ponto: evento `moved_without_point` (> 250 m) e aprende o ponto após 2 dias completos. Com ponto, fora dele: adota o novo lugar após 1 dia completo (`geofence_history` + evento `moved_point`).
+- O gatilho nunca bloqueia a gravação (bloco EXCEPTION + lock_timeout 3 s). `FOR NO KEY UPDATE` evita o deadlock com a FK.
+
+### 21.3 Achados desta rodada (viram requisito do servidor/APK)
+1. `strict` é palavra reservada no plpgsql -> coluna renomeada `must_stay` (a falha antiga "record gf has no field strict").
+2. **`recorded_at` é o relógio do próprio terminal no momento do ENVIO, não a hora do fix GPS** (`sendToSupabase`: `now = isoNow(System.currentTimeMillis())`; o próprio código diz que reenvia fix em cache com horário novo). Consequências: (a) relógio errado no futuro cegaria o gatilho -> blindado (`svc_now()`: leitura > 10 min no futuro não decide nem conta como "mais nova"; testes S8c); (b) fix em cache reenviado aparece como leitura nova -> v2.0.26 deve enviar `Location.getTime()` como `recorded_at` do fix.
+3. Leitura atrasada (dias) que chega depois de uma nova fica só no histórico e não altera o estado ao vivo (teste S8b). Por isso a fila única da v2.0.26 TEM que enviar do mais antigo para o mais novo, nunca a leitura ao vivo na frente do backlog.
+4. Teste S8 original embaralhava leituras com dias de diferença (irreal); trocado por inversões de até 150 s (60 sementes).
+
+### 21.4 Antes de ir a produção (pendências)
+- Conferir no banco real: valores aceitos em `events.type` (`moved_without_point`, `point_created`, `moved_point`), RLS/policies, trigger da trava `fleet_writes_allowed`, e que o painel exibe esses tipos.
+- Plano de desfazer: recriar o gatilho antigo `trg_check_geofence` (definição guardada em `schema_real.sql`) e `DROP TRIGGER trg_eval_location_v3`.
+- Custo: medir após aplicar (escritas em `devices` só quando o estado muda).
+- Privacidade: o repositório é PÚBLICO; rastros GPS reais (`prod_outside_data.py`, `real_data_v3.py`) ficam só locais (.gitignore). `real_data.py` (versionado antes) contém coordenadas reais de incidentes — decisão do Wallacy sobre limpar o histórico.
