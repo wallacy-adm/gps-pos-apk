@@ -54,3 +54,8 @@ dela de que o terminal não sai de 3 metros fisicamente. Não achei nenhum
 outro caso na base de GPS de alta precisão "mentindo" — a explicação mais
 provável é o ponto de geofence dela estar calibrado errado, não erro de
 leitura. Fica pra confirmar com acesso físico.
+
+## Dados reais (NÃO versionados)
+`prod_outside_data.py` e `real_data_v3.py` contêm rastros GPS reais da frota (com nomes) e ficam FORA do repositório
+porque ele é público. Para rodar `replay_prod_outside.py` e `test_v3.py`, regere-os a partir do banco (consulta de
+leituras GPS <= 30 m fora do raio + vizinhas) e salve na pasta `tests/virtual_test/`.
