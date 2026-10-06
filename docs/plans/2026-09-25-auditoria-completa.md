@@ -592,3 +592,21 @@ Fonte: `plugins/with-boot-receiver.js` (GpsLocationService), v2.0.25.
 1. Mover o filtro para DENTRO do `onLocationChanged`: só envia se (a) mudou mais que um limiar de distância desde o último envio, ou (b) passou o intervalo de sinal de vida (1x/hora), ou (c) mudou o estado de ponto.
 2. A janela (seg–sáb 06:30–19:00, domingo 06:30–13:00) vale para TODOS os caminhos de envio, não só o batimento.
 3. Parar de pedir fix a cada 15–30 s fora da janela (desregistrar o ouvinte), o que também economiza bateria.
+
+---
+
+## 24. Gatilho v3 EM PRODUÇÃO (05–06/10/2026, OK do Wallacy) — registro e como desfazer
+
+### 24.1 Linha do tempo
+- 05/10 ~19h37 (Fortaleza): pré-checagem só leitura no banco real (sem CHECK em `events.type`, trava `fleet_writes_allowed` = true, ferramenta roda como `postgres`). **Etapa A** aplicada: 12 colunas em `devices`, `locked`/`must_stay` em `geofences`, tabela `geofence_history` (RLS + leitura), 8 funções (`geo_dist_m`, `in_service_hours`, `find_cluster`, `review_point`, `review_throttled`, `svc_now`, `eval_location_core`, `eval_location_v3`). Teste em produção dentro de uma transação que se desfaz sozinha: saiu -> voltou, estado final dentro, nada sobrou.
+- 05/10 ~19h40: a troca do gatilho foi bloqueada pelo limite de ações MCP do plano free do Lovable (28 min) e a sessão acabou no limite. Estado seguro: gatilho antigo ativo, novo inerte.
+- **06/10 07h15 (Fortaleza) — Etapa B:** `DROP TRIGGER trg_check_geofence` (devices) + `CREATE TRIGGER trg_eval_location_v3 AFTER INSERT ON locations`, num único lote atômico. Gatilhos agora: `gate_devices_write`, `gate_locations_write`, `trg_eval_location_v3`.
+- (Primeira tentativa de B falhou por erro de tipo só na consulta de verificação; lote atômico, nada mudou.)
+
+### 24.2 Como desfazer (1 minuto)
+Arquivo `docs/plans/2026-10-05-gatilho-v3-DESFAZER.sql`: derruba `trg_eval_location_v3` e recria `trg_check_geofence` (a função antiga continua no banco). Colunas e funções novas ficam inertes.
+
+### 24.3 O que muda na prática
+- Saídas passam a ser detectadas (o antigo acertava 0%). Aprende ponto sozinho após 2 dias completos nos terminais sem ponto; adota novo ponto após 1 dia completo (Angelica); eventos novos: `point_created`, `moved_point`, `moved_without_point`.
+- O UPDATE do heartbeat em `devices` deixa de executar a busca do gatilho antigo (era 89% do tempo de banco). Medição de efeito nos créditos: Usage de 07 e 08/10.
+- Emilly: ponto ainda NÃO cadastrado. Se ela for aprendida automaticamente em 2 dias completos, conferir se é o ponto de venda e então travar (`locked`, `must_stay`). Local exato depende da confirmação do Wallacy.
