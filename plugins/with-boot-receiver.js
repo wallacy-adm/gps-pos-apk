@@ -1347,9 +1347,22 @@ public class GpsLocationService extends Service {
                             gpsCandidates.clear();
                             if (!isImpossibleJump(lastGps)) {
                                 lastKnownLocation = lastGps;
-                                lastSentTime = System.currentTimeMillis();
                                 LocationStore.save(getApplicationContext(), lastGps.getLatitude(), lastGps.getLongitude());
-                                new Thread(() -> sendToSupabase(lastGps)).start();
+                                // v2.0.26: mesmo filtro de economia de dado do path principal.
+                                // Sem isso, esse "promovendo" (NETWORK confirma GPS parado)
+                                // podia disparar um envio a cada ~15s (NET_TIME_MS) mesmo com
+                                // o terminal 100% parado — furava exatamente a economia de
+                                // dado que e o motivo central da v2.0.26.
+                                float distFromLastSentPromo = (lastSentLocation != null)
+                                        ? lastGps.distanceTo(lastSentLocation) : Float.MAX_VALUE;
+                                if (lastSentLocation == null || distFromLastSentPromo >= MIN_SEND_DIST_M) {
+                                    lastSentLocation = lastGps;
+                                    lastSentTime = System.currentTimeMillis();
+                                    new Thread(() -> sendToSupabase(lastGps)).start();
+                                } else {
+                                    Log.i(TAG, "Promovido mas parado (" + (int)distFromLastSentPromo
+                                            + "m do ultimo envio) — nao envia, heartbeat cobre");
+                                }
                             }
                         } else {
                             Log.w(TAG, "NETWORK rejeitou GPS: " + (int)gpsDist + "m — A-GPS falso descartado");
