@@ -77,6 +77,7 @@ jobs:
              ${{ steps.version.outputs.apk_name }}
 
       - name: Criar GitHub Release e publicar APK
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
@@ -86,6 +87,7 @@ jobs:
           make_latest: true
 
       - name: Atualizar latest.json
+        if: github.ref == 'refs/heads/main'
         run: |
           TRACKING=$(node -p "JSON.parse(require('fs').readFileSync('./latest.json','utf8')).tracking_enabled === true ? 'true' : 'false'" 2>/dev/null || echo "false")
           cat > latest.json << EOF
