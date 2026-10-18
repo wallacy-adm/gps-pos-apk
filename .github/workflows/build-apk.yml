@@ -42,15 +42,15 @@ jobs:
           EXPO_NO_TELEMETRY: 1
           OPENCELLID_API_KEY: ${{ secrets.OPENCELLID_API_KEY }}
 
-      - name: Gerar keystore de assinatura
+      - name: Restaurar keystore de assinatura fixo
         run: |
-          keytool -genkeypair \
-            -keystore android/app/standalone.keystore \
-            -alias standalone \
-            -keyalg RSA -keysize 2048 -validity 9000 \
-            -dname "CN=Standalone,O=POS,C=BR" \
-            -storepass standalone -keypass standalone
-          echo "Keystore criado"
+          if [ -z "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "ERRO FATAL: secret ANDROID_KEYSTORE_BASE64 nao configurado."
+            echo "Build abortado de proposito — gerar keystore novo aqui quebraria o update silencioso em producao (assinatura != app ja instalado)."
+            exit 1
+          fi
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/standalone.keystore
+          echo "Keystore restaurado do secret (fixo, mesma assinatura de sempre)"
 
       - name: Configurar build.gradle
         run: python3 .github/scripts/configure_gradle.py
