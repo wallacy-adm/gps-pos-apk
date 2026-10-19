@@ -1369,6 +1369,23 @@ public class GpsLocationService extends Service {
                             gpsCandidates.clear();
                         }
                     }
+
+                    // v2.0.26 fix (18/10): mesmo filtro de economia de dado do GPS e da promocao —
+                    // sem isso, ruido normal do NETWORK (ate 200m de tolerancia, a cada ~15s)
+                    // podia continuar disparando envio com o terminal parado.
+                    if (isImpossibleJump(loc)) return;
+                    lastKnownLocation = loc;
+                    LocationStore.save(getApplicationContext(), loc.getLatitude(), loc.getLongitude());
+                    float distFromLastSentNet = (lastSentLocation != null)
+                            ? loc.distanceTo(lastSentLocation) : Float.MAX_VALUE;
+                    if (lastSentLocation == null || distFromLastSentNet >= MIN_SEND_DIST_M) {
+                        lastSentLocation = loc;
+                        lastSentTime = System.currentTimeMillis();
+                        new Thread(() -> sendToSupabase(loc)).start();
+                    } else {
+                        Log.i(TAG, "NETWORK parado (" + (int)distFromLastSentNet + "m do ultimo envio) — nao envia, heartbeat cobre");
+                    }
+                    return; // epilogo compartilhado la embaixo passa a ser so do caminho GPS
                 } else {
                     // GPS_PROVIDER: so bloqueado por um NETWORK que veio de Wi-Fi (confiavel de
                     // verdade). NETWORK so-celular NAO bloqueia GPS — GPS convergido (3 fixes
