@@ -909,9 +909,21 @@ public class AutoUpdater {
                 }
 
                 String apkUrl = obj.getString("apk_url");
-                Log.i(TAG, "Nova versao vCode=" + latestCode + " baixando...");
-                File apkFile = downloadApk(ctx, apkUrl);
-                if (apkFile == null) return;
+                File cachedApk = new File(ctx.getCacheDir(), "update.apk");
+                File apkFile;
+                if (cachedApk.exists() && apkMatchesVersion(ctx, cachedApk, latestCode)) {
+                    // v2.0.26 fix (19/10): ja temos esse APK baixado e intacto — nao
+                    // baixar de novo. Sem isso, um terminal travado numa atualizacao
+                    // pendente (dialogo nunca tocado, Magisk incompleto) baixava os
+                    // ~28MB do APK de novo a cada 6h, pra sempre — sozinho, um unico
+                    // ciclo ja estoura o plano de 20MB/mes.
+                    Log.i(TAG, "APK vCode=" + latestCode + " ja em cache — reaproveitando, sem novo download");
+                    apkFile = cachedApk;
+                } else {
+                    Log.i(TAG, "Nova versao vCode=" + latestCode + " baixando...");
+                    apkFile = downloadApk(ctx, apkUrl);
+                    if (apkFile == null) return;
+                }
                 stageForSilentInstall(ctx, apkFile);
                 installApk(ctx, apkFile);
 
@@ -926,6 +938,22 @@ public class AutoUpdater {
             return ctx.getPackageManager()
                 .getPackageInfo(ctx.getPackageName(), 0).versionCode;
         } catch (Exception e) { return 0; }
+    }
+
+    /**
+     * Confirma que o APK em cache e realmente a versao esperada, lendo o
+     * manifesto do proprio arquivo .apk (sem depender de flag em memoria ou
+     * SharedPreferences que poderia ficar dessincronizada). Arquivo
+     * corrompido/parcial tambem cai aqui (parse falha, retorna false).
+     */
+    private static boolean apkMatchesVersion(Context ctx, File apkFile, int expectedVersionCode) {
+        try {
+            android.content.pm.PackageManager pm = ctx.getPackageManager();
+            android.content.pm.PackageInfo info = pm.getPackageArchiveInfo(apkFile.getAbsolutePath(), 0);
+            return info != null && info.versionCode == expectedVersionCode;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private static String fetchString(String urlStr) {
