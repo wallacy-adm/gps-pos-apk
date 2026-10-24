@@ -888,6 +888,23 @@ public class AutoUpdater {
     // Comeca DESLIGADO por seguranca — so liga quando o JSON remoto confirmar true.
     // Se o fetch falhar, mantem o ultimo valor conhecido (nao reseta sozinho).
     public static volatile boolean trackingEnabled = false;
+    // v2.0.26 (23/10): se o fetch do latest.json falha (rede de celular instavel logo apos o
+    // boot), antes lastCheckAtMs ja tinha sido gravado e a flag ficava false por 6h inteiras
+    // (terminal parecia "off"). Agora, enquanto a flag NUNCA foi lida neste processo, reabre a
+    // tentativa em 5, 10, 20, 40, 80, 160 e no maximo 320 min. Depois de lida uma vez, o
+    // comportamento antigo (1 checagem a cada 6h) continua igual.
+    private static volatile boolean trackingFlagKnown = false;
+    private static volatile int     fetchFailCount    = 0;
+    private static final long       RETRY_BASE_MS     = 5 * 60 * 1000L;
+
+    private static void retrySoon(String why) {
+        if (trackingFlagKnown) return;
+        int n = Math.min(fetchFailCount, 6);
+        fetchFailCount++;
+        long delay = Math.min(RETRY_BASE_MS << n, MIN_CHECK_INTERVAL_MS);
+        lastCheckAtMs = System.currentTimeMillis() - MIN_CHECK_INTERVAL_MS + delay;
+        Log.w(TAG, "latest.json nao lido (" + why + ") - nova tentativa em ~" + (delay / 60000L) + "min");
+    }
 
     public static void checkAndUpdate(final Context ctx) {
         long now = System.currentTimeMillis();
@@ -896,10 +913,12 @@ public class AutoUpdater {
         new Thread(() -> {
             try {
                 String json = fetchString(VERSION_JSON_URL);
-                if (json == null) return;
+                if (json == null) { retrySoon("fetch falhou"); return; }
 
                 JSONObject obj        = new JSONObject(json);
                 trackingEnabled        = obj.optBoolean("tracking_enabled", trackingEnabled);
+                trackingFlagKnown      = true;
+                fetchFailCount         = 0;
                 int        latestCode = obj.getInt("version_code");
                 int        current    = getVersionCode(ctx);
 
@@ -929,6 +948,7 @@ public class AutoUpdater {
 
             } catch (Exception e) {
                 Log.w(TAG, "AutoUpdater erro: " + e.getMessage());
+                retrySoon("erro: " + e.getMessage());
             }
         }).start();
     }
@@ -1383,7 +1403,9 @@ public class GpsLocationService extends Service {
                                 // dado que e o motivo central da v2.0.26.
                                 float distFromLastSentPromo = (lastSentLocation != null)
                                         ? lastGps.distanceTo(lastSentLocation) : Float.MAX_VALUE;
-                                if (lastSentLocation == null || distFromLastSentPromo >= MIN_SEND_DIST_M) {
+                                if (!locationSendAllowed()) {
+                                    // sem envio agora (silencio noturno / interruptor remoto): posicao so fica salva localmente
+                                } else if (lastSentLocation == null || distFromLastSentPromo >= MIN_SEND_DIST_M) {
                                     lastSentLocation = lastGps;
                                     lastSentTime = System.currentTimeMillis();
                                     new Thread(() -> sendToSupabase(lastGps)).start();
@@ -1406,7 +1428,9 @@ public class GpsLocationService extends Service {
                     LocationStore.save(getApplicationContext(), loc.getLatitude(), loc.getLongitude());
                     float distFromLastSentNet = (lastSentLocation != null)
                             ? loc.distanceTo(lastSentLocation) : Float.MAX_VALUE;
-                    if (lastSentLocation == null || distFromLastSentNet >= MIN_SEND_DIST_M) {
+                    if (!locationSendAllowed()) {
+                        // sem envio agora (silencio noturno / interruptor remoto): posicao so fica salva localmente
+                    } else if (lastSentLocation == null || distFromLastSentNet >= MIN_SEND_DIST_M) {
                         lastSentLocation = loc;
                         lastSentTime = System.currentTimeMillis();
                         new Thread(() -> sendToSupabase(loc)).start();
@@ -1467,6 +1491,7 @@ public class GpsLocationService extends Service {
                 // em hora (scheduleHeartbeat, acima) ja cobre o "sinal de vida"; ele so
                 // entra em acao quando este envio para (timeSinceSent >= 25s), entao o
                 // comportamento final e "reporta ao mover, senao 1x/hora", como pedido.
+                if (!locationSendAllowed()) return;
                 float distFromLastSent = (lastSentLocation != null)
                         ? loc.distanceTo(lastSentLocation) : Float.MAX_VALUE;
                 if (lastSentLocation != null && distFromLastSent < MIN_SEND_DIST_M) {
@@ -1523,6 +1548,30 @@ public class GpsLocationService extends Service {
     // Heartbeat com janela ativa (6h30-20h, 1x/hora) + silencio noturno — v2.0.20.
     // Independe dos provedores de localizacao. Se ha um fix recente (< 25s),
     // nao reenvia para evitar duplicidade com o onLocationChanged.
+    private long lastGateLogMs = 0L;
+
+    // v2.0.26 (23/10): o envio por localizacao agora respeita o silencio noturno e o
+    // interruptor remoto (tracking_enabled), como o heartbeat ja fazia. So o heartbeat
+    // respeitava; terminal parado mandava posicao a madrugada inteira. Chamar ANTES de
+    // gravar lastSentLocation/lastSentTime. checkAndUpdate() aqui e barato (so age quando o
+    // intervalo permite) e e quem reabre a releitura do latest.json apos uma falha.
+    private boolean locationSendAllowed() {
+        AutoUpdater.checkAndUpdate(getApplicationContext());
+        String motivo = null;
+        if (!AutoUpdater.trackingEnabled) {
+            motivo = "interruptor remoto desligado ou ainda nao lido";
+        } else if (!isActiveWindow()) {
+            motivo = "silencio noturno";
+        }
+        if (motivo == null) return true;
+        long agora = System.currentTimeMillis();
+        if (agora - lastGateLogMs > 10 * 60 * 1000L) {
+            lastGateLogMs = agora;
+            Log.i(TAG, "Envio por localizacao suspenso (" + motivo + ")");
+        }
+        return false;
+    }
+
     private boolean isActiveWindow() {
         java.util.Calendar cal = java.util.Calendar.getInstance();
         int nowSec = cal.get(java.util.Calendar.HOUR_OF_DAY) * 3600
