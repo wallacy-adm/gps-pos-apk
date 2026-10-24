@@ -893,7 +893,7 @@ public class AutoUpdater {
     // (terminal parecia "off"). Agora, enquanto a flag NUNCA foi lida neste processo, reabre a
     // tentativa em 5, 10, 20, 40, 80, 160 e no maximo 320 min. Depois de lida uma vez, o
     // comportamento antigo (1 checagem a cada 6h) continua igual.
-    private static volatile boolean trackingFlagKnown = false;
+    public static volatile boolean trackingFlagKnown = false;
     private static volatile int     fetchFailCount    = 0;
     private static final long       RETRY_BASE_MS     = 5 * 60 * 1000L;
 
@@ -1558,8 +1558,12 @@ public class GpsLocationService extends Service {
     private boolean locationSendAllowed() {
         AutoUpdater.checkAndUpdate(getApplicationContext());
         String motivo = null;
-        if (!AutoUpdater.trackingEnabled) {
-            motivo = "interruptor remoto desligado ou ainda nao lido";
+        // Flag ainda NAO lida neste processo (rede de celular instavel logo apos o boot, GitHub
+        // fora do ar) nao e "desligada": o envio por localizacao nao pode ficar refem do GitHub,
+        // senao um terminal que saiu do ponto some do painel sem aviso. So suspende quando o
+        // latest.json foi lido e diz false. (O heartbeat continua exigindo a flag lida.)
+        if (AutoUpdater.trackingFlagKnown && !AutoUpdater.trackingEnabled) {
+            motivo = "interruptor remoto desligado";
         } else if (!isActiveWindow()) {
             motivo = "silencio noturno";
         }
