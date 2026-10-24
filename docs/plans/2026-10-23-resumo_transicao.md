@@ -30,3 +30,15 @@
 - Conferir assinatura dos APKs antigos da frota (keystore aleatória) antes do rollout; backup da keystore-prod; `app.json` owner "wallacy1"; fila HTTP serializada; reuso de conexão; notificação "Atualização concluída".
 ## Perguntas em aberto para o Wallacy
 - Quem reiniciou o aparelho às 04:52 de 23/10? (se ninguém: investigar reboot espontâneo / reboot agendado de MDM)
+
+---
+# ATUALIZAÇÃO 24/10 — A+B implementados por outra sessão e AUDITADOS aqui
+- Commits `298a1b7` (A+B) e `65ea60d` (flag não lida não suspende envio por localização), push ok. Esta sessão só auditou, não editou código.
+- Decisão do Wallacy: horário de parada é 20h (ACTIVE_END_HOUR=20 fica). O "19h" citado acima estava errado. D = sem mudança.
+- Verificado: diff lido linha a linha; `node --check` ok; javac: 61 símbolos não resolvidos idênticos aos de d4e20e8 (nenhum novo; 434->437 erros = chamadas extras às mesmas classes Android); zero erro real de sintaxe; run 40109154698 success com headSha 65ea60d; APK 65ea60d contém as strings novas e o d4e20e8 não (sha256 64EF8E7D...); os 3 zips Magisk (Downloads\GPS_POS_MagiskModule_v2026.zip, C:\Users\walla\GPS_POS_MagiskModule.zip) carregam o APK 65ea60d.
+- NÃO testado em aparelho: A (retry após falha do latest.json) e B (silêncio noturno). Terminal de bancada sem ADB em 24/10 ~18:25 (não aparece no Windows).
+- Cobertura de B conferida: os 3 pontos de envio por localização passam por `locationSendAllowed()`; torre de celular e IP só são chamados dentro do ramo ativo do heartbeat (gated); `sendBootHeartbeat` envia no boot em qualquer hora (intencional).
+- Riscos abertos: (1) janela 6h30-20h usa o relógio/fuso do aparelho e agora vale também pro envio por localização: terminal com hora errada fica mudo de dia — conferir `adb shell date` em terminais de campo; (2) heartbeat ainda exige a flag lida (GitHub inacessível = terminal parado fica sem sinal de vida até ler); (3) ping-pong celular x GPS de dia ainda sem tratamento (item C, não aprovado).
+- Reboot espontâneo de 23/10 04:52: Wallacy confirma que NÃO foi ele; causa desconhecida (não investigada: aparelho sem ADB).
+- Ideia do Wallacy (24/10): enviar só no boot, 1x de dia e ao desligar. Análise: heartbeat de hora em hora custa estimados 2-4MB/mês (não medido); "ao desligar" não é confiável (0 eventos de shutdown em 2 anos); o envio das 20h e o do boot já existem; painel precisaria mudar o critério de "off". Alternativa: heartbeat a cada 3-4h configurável remotamente via latest.json + medir bytes reais antes. Aguarda decisão.
+- Roteiro de teste (quando o aparelho voltar): instalar módulo -> reboot -> ~minuto 4 `svc data disable` -> ~minuto 7 `svc data enable` -> esperar "latest.json nao lido (fetch falhou) - nova tentativa em ~5min" e depois "Sem atualizacao ... tracking=true". Noite: soak esperando ZERO "Heartbeat erro" entre 20:00 e 06:30 além do único "Silencio noturno: enviando ultima localizacao" e logs "Envio por localizacao suspenso (silencio noturno)".
