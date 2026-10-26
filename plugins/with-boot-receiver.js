@@ -1280,6 +1280,31 @@ public class GpsLocationService extends Service {
     private volatile long     lastSentTime        = 0L;     // evita heartbeats redundantes
     private volatile android.location.Location lastSentLocation = null; // ultima posicao REALMENTE enviada (v2.0.26) — base do filtro de economia de dado
     private static final float MIN_SEND_DIST_M = 30f; // so envia fora do heartbeat se andou pelo menos isso
+    // v2.0.26 item C (26/10, aprovado): histerese anti ping-pong torre x GPS.
+    // Fix de torre (acc ~200m) e GPS divergem ~1km e alternam, gerando "movimento" falso
+    // com o terminal parado (3 envios em 40 min medidos na bancada). Agora um deslocamento
+    // so vale se (1) passa de max(30m, precisao do proprio fix) e (2) um SEGUNDO fix,
+    // em ate 5 min, concorda com o primeiro. Voltar para perto do ultimo envio cancela.
+    private volatile android.location.Location pendingMove = null;
+    private volatile long pendingMoveAt = 0L;
+    private static final long PENDING_MOVE_WINDOW_MS = 5 * 60_000L;
+    private boolean moveConfirmed(android.location.Location loc, float distFromLastSent) {
+        if (lastSentLocation == null) return true; // primeiro envio apos iniciar: sempre
+        float need = Math.max(MIN_SEND_DIST_M, loc.hasAccuracy() ? loc.getAccuracy() : 0f);
+        if (distFromLastSent < need) { pendingMove = null; return false; }
+        long now = System.currentTimeMillis();
+        android.location.Location p = pendingMove;
+        float tol = Math.max(50f, loc.hasAccuracy() ? loc.getAccuracy() : 0f);
+        if (p != null && (now - pendingMoveAt) <= PENDING_MOVE_WINDOW_MS && loc.distanceTo(p) <= tol) {
+            pendingMove = null;
+            Log.i(TAG, "Movimento confirmado (" + (int)distFromLastSent + "m do ultimo envio, 2 fixes concordam) - envia");
+            return true;
+        }
+        pendingMove = loc;
+        pendingMoveAt = now;
+        Log.i(TAG, "Possivel movimento (" + (int)distFromLastSent + "m) - aguardando 2o fix concordante, nao envia ainda");
+        return false;
+    }
     private static final long  WAKE_LOCK_TIMEOUT_MS = 2 * 60 * 60 * 1000L; // v2.0.26: trava com prazo + renovacao, nunca mais indefinida
     private volatile android.location.Location lastNetworkLocation = null; // ultimo NETWORK aceito — cross-validation contra A-GPS falso
     private volatile boolean lastNetworkFixWasWifi = false; // true se o ultimo NETWORK aceito veio com Wi-Fi ativo (confiavel) — false = so celular (estimativa generica, nao deve travar GPS nem Wi-Fi futuro)
@@ -1405,7 +1430,7 @@ public class GpsLocationService extends Service {
                                         ? lastGps.distanceTo(lastSentLocation) : Float.MAX_VALUE;
                                 if (!locationSendAllowed()) {
                                     // sem envio agora (silencio noturno / interruptor remoto): posicao so fica salva localmente
-                                } else if (lastSentLocation == null || distFromLastSentPromo >= MIN_SEND_DIST_M) {
+                                } else if (moveConfirmed(lastGps, distFromLastSentPromo)) {
                                     lastSentLocation = lastGps;
                                     lastSentTime = System.currentTimeMillis();
                                     new Thread(() -> sendToSupabase(lastGps)).start();
@@ -1430,7 +1455,7 @@ public class GpsLocationService extends Service {
                             ? loc.distanceTo(lastSentLocation) : Float.MAX_VALUE;
                     if (!locationSendAllowed()) {
                         // sem envio agora (silencio noturno / interruptor remoto): posicao so fica salva localmente
-                    } else if (lastSentLocation == null || distFromLastSentNet >= MIN_SEND_DIST_M) {
+                    } else if (moveConfirmed(loc, distFromLastSentNet)) {
                         lastSentLocation = loc;
                         lastSentTime = System.currentTimeMillis();
                         new Thread(() -> sendToSupabase(loc)).start();
@@ -1494,7 +1519,7 @@ public class GpsLocationService extends Service {
                 if (!locationSendAllowed()) return;
                 float distFromLastSent = (lastSentLocation != null)
                         ? loc.distanceTo(lastSentLocation) : Float.MAX_VALUE;
-                if (lastSentLocation != null && distFromLastSent < MIN_SEND_DIST_M) {
+                if (!moveConfirmed(loc, distFromLastSent)) {
                     Log.i(TAG, "Parado (" + (int)distFromLastSent + "m do ultimo envio, limiar="
                             + (int)MIN_SEND_DIST_M + "m) — nao envia agora, heartbeat cobre");
                     return;
