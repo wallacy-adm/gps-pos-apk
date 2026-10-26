@@ -66,3 +66,14 @@ Fonte: log on-device (soak-ondevice-1025/gps_soak.log), processo do app vivo o t
 - Bateria do terminal de teste: 35% (USB). PC dormindo corta energia.
 - Fuso do device: America/Sao_Paulo, hora certa (07:23 -03).
 
+
+
+## 26/10 (noite) - Item C aprovado + deploy de teste do 9addf97
+
+- Decisoes do Wallacy: C aprovado; heartbeat segue de 1 em 1 hora (sem mudanca de escopo).
+- C ja estava commitado em 9addf97 (histerese: desloca so se > max(30m, precisao) E um 2o fix concordante em ate 5 min chega; voltar perto do ultimo envio cancela). Aplicado nos 3 pontos de envio por localizacao. node --check OK. CI workflow_dispatch run 40350828008 (sha 9addf97) = success.
+- APK do CI: SHA256 74D20A86D5FD10F4178155C7EC5D5218E53016C3E47A50F009CD25F538AFC3B0 (test-build-2026/gps-pos-v2.0.26-9addf97.apk).
+- Modulo Magisk regenerado com esse APK (build_magisk_module.py) e instalado no terminal de bancada; apos reboot /system/priv-app/GPSPosService/GPSPosService.apk = 74d20a86 (versionCode 43, 2.0.26). Logger on-device religado 20:00. Log antigo salvo em test-build-2026/soak-ondevice-1026/gps_soak.log.
+- Limite conhecido do C: terminal em movimento rapido (fix a fix > 50m de distancia) so confirma ao desacelerar; aceitavel porque terminais sao fixos/portateis.
+- Proximo: ler log da noite 26->27/10 e checar de manha: (1) 1 so envio as 20:00, nada ate 06:30; (2) apos 06:30, mensagens "Possivel movimento ... aguardando 2o fix" sem envios falsos com terminal parado.
+
