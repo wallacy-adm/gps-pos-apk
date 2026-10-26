@@ -52,3 +52,17 @@
 - O reboot do aparelho de 23/10 04:52 NÃO coincide com suspensão do PC (PC dormiu às 05:31): continua sem causa.
 - LOGGER NO APARELHO (independe do PC), iniciado 25/10 14:53: `logcat -f /data/local/tmp/soak/gps_soak.log -r 2048 -n 6` como root (tags GpsLocationService, AutoUpdater, AndroidRuntime:E, ActivityManager:W). Morre se o aparelho reiniciar. Para puxar: `adb shell "su -c 'cp /data/local/tmp/soak/gps_soak.log* /sdcard/'"` e `adb pull /sdcard/gps_soak.log C:\eas\gps-pos-apk\test-build-2026\`.
 - B: esperado a partir de 20:00 de 25/10: UMA linha "Silencio noturno: enviando ultima localizacao antes de dormir" (com erro de DNS esperado), logs "Envio por localizacao suspenso (silencio noturno)" no máximo 1 a cada 10 min, e ZERO outros "Heartbeat erro"/"Keepalive erro" até 06:30.
+
+
+## 26/10 - Resultado do teste B (silencio noturno 25/10 20:00 -> 26/10 06:30), APK 65ea60d
+
+Fonte: log on-device (soak-ondevice-1025/gps_soak.log), processo do app vivo o tempo todo (PID 2571, sem crash/restart).
+
+- 20:00:00 "Silencio noturno: enviando ultima localizacao antes de dormir" (1 tentativa). Depois disso ZERO tentativas de envio ate 06:30:00. Entre 20:00 e 06:30 so "Envio por localizacao suspenso (silencio noturno)" (log limitado a 1 a cada 10 min). B APROVADO.
+- 06:30:00 heartbeat de abertura da janela (age=66287s = fix velho, terminal parado na bancada).
+- Todos os envios falharam com DNS (backend supabase do Lovable morto) - a tentativa foi contada, o MB real NAO foi medido.
+- Manha: 06:56, 07:00 e 07:08 "Heartbeat erro" sem "Heartbeat: enviando" = envios por localizacao com terminal PARADO (3 em ~40 min). Indicio de ping-pong torre x GPS (item C, NAO aprovado).
+- AutoUpdater: leituras do latest.json em 25/10 19:00 e 26/10 07:13 (12h de intervalo, gate e 6h). Hipotese (nao provada): leitura de ~01:00 falhou em silencio (retrySoon sai sem log quando a flag ja e conhecida). Flag segue tracking=true.
+- Bateria do terminal de teste: 35% (USB). PC dormindo corta energia.
+- Fuso do device: America/Sao_Paulo, hora certa (07:23 -03).
+
