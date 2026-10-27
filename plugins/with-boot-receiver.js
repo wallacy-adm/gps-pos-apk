@@ -1680,7 +1680,9 @@ public class GpsLocationService extends Service {
             // Tambem e onde a flag remota tracking_enabled (latest.json) e atualizada.
             AutoUpdater.checkAndUpdate(getApplicationContext());
 
-            if (!AutoUpdater.trackingEnabled) {
+            // v2.0.26 (27/10): so suspende se a flag foi LIDA e esta desligada - mesma regra de locationSendAllowed().
+            // Antes, flag ainda nao lida (rede lenta no boot) engolia o 1o tick: na bancada o "antes de dormir" atrasou 45 min.
+            if (AutoUpdater.trackingFlagKnown && !AutoUpdater.trackingEnabled) {
                 Log.i(TAG, "Envio desligado remotamente (tracking_enabled=false) — nao enviando nada");
             } else if (isActiveWindow()) {
                 long timeSinceSent = System.currentTimeMillis() - lastSentTime;
