@@ -77,3 +77,17 @@ Fonte: log on-device (soak-ondevice-1025/gps_soak.log), processo do app vivo o t
 - Limite conhecido do C: terminal em movimento rapido (fix a fix > 50m de distancia) so confirma ao desacelerar; aceitavel porque terminais sao fixos/portateis.
 - Proximo: ler log da noite 26->27/10 e checar de manha: (1) 1 so envio as 20:00, nada ate 06:30; (2) apos 06:30, mensagens "Possivel movimento ... aguardando 2o fix" sem envios falsos com terminal parado.
 
+
+
+## 27/10 - Resultado da noite 26->27/10 com APK 9addf97 (item C), log on-device
+
+Fonte: test-build-2026/soak-ondevice-1027 (eventos.txt). Aparelho: boot 19:59 do dia 26 (reboot do deploy), uptime 11h26 as 07:26, bateria 86%, 0 crash (AndroidRuntime).
+
+- C FUNCIONOU: 0 "Movimento confirmado"; 3 "Possivel movimento (166m / 175m / 74m) - aguardando 2o fix concordante" entre 06:49 e 07:05 e NENHUM envio falso. Antes do C (65ea60d) eram 3 envios falsos em ~40 min na mesma janela.
+- Silencio noturno OK: entre o envio de "antes de dormir" e 06:30 so "Envio por localizacao suspenso". O envio de "antes de dormir" saiu 2x (20:45:23 e 21:26:45) porque o processo reiniciou no meio (flag e por processo, nao por dia). Custo: 1 envio extra por reinicio noturno do app.
+- 06:30:00 heartbeat de abertura + 06:31:05 1 envio extra = "primeiro envio apos iniciar" (lastSentLocation nulo no processo novo), por desenho.
+- "age=1793093400s" no log do heartbeat NAO e bug de posicao: age = tempo desde o ultimo envio (lastSentTime=0 em processo novo). So log.
+- Ruido de rede persistente: "NETWORK rejeitou GPS" ~900-1100m (ate 3km) e "Jump impossivel" a noite toda = torre x GPS divergem ~1km. Filtros seguram; sem consequencia de envio.
+- AutoUpdater pos-boot: 3 falhas de leitura do latest.json (20:02, 20:07, 20:17) com backoff 5/10/20 min, leitura OK 20:37:46 (tracking=true). A funciona.
+- ANOMALIA ABERTA: 26/10 21:11:33 o sistema matou varios processos de uma vez (LatinIME, posservice pid 2573 e outros) - "Scheduling restart of crashed service ... GpsLocationService in 10986ms"; servico voltou em ~12s (START_STICKY), sem AndroidRuntime. Mesmo padrao de 22/10 21:42. Memoria nao e a causa (MemAvailable 1.27GB de 1.9GB). Suspeita NAO provada: MDM (com.xcheng.mdm). Load average ~20 constante.
+
