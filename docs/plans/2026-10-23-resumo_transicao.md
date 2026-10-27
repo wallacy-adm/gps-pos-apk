@@ -91,3 +91,20 @@ Fonte: test-build-2026/soak-ondevice-1027 (eventos.txt). Aparelho: boot 19:59 do
 - AutoUpdater pos-boot: 3 falhas de leitura do latest.json (20:02, 20:07, 20:17) com backoff 5/10/20 min, leitura OK 20:37:46 (tracking=true). A funciona.
 - ANOMALIA ABERTA: 26/10 21:11:33 o sistema matou varios processos de uma vez (LatinIME, posservice pid 2573 e outros) - "Scheduling restart of crashed service ... GpsLocationService in 10986ms"; servico voltou em ~12s (START_STICKY), sem AndroidRuntime. Mesmo padrao de 22/10 21:42. Memoria nao e a causa (MemAvailable 1.27GB de 1.9GB). Suspeita NAO provada: MDM (com.xcheng.mdm). Load average ~20 constante.
 
+
+
+## 27/10 (manha) - Correcoes pos-soak: silencio noturno por NOITE + heartbeat sem exigir flag lida (APK 9ac366a)
+
+Pedido do Wallacy: corrigir o envio duplicado "antes de dormir" com rigor maximo (zero retrabalho).
+
+Causa raiz: nightSilenceSent era volatile em memoria -> app morto pelo sistema (21:11) ou reiniciado = processo novo reenviava. Agravante achado na auditoria: o tick do heartbeat exigia trackingEnabled (default false) -> com a flag ainda nao lida o 1o tick apos boot era engolido (envio "antes de dormir" saiu 45 min depois do boot).
+
+Commits (branch v2.0.26-dev, main intocada):
+- 55ffe39: noite persistida em SharedPreferences (posservice_state / night_sent_id, commit sincrono). Id = yyyyMMdd da data em que a noite COMECOU (20h); antes das 6h30 ainda e a noite de ontem. Heartbeat de boot feito de noite tambem marca a noite como coberta (nao gasta 2o envio).
+- 9ac366a: tick do heartbeat so suspende se flag LIDA e desligada (mesma regra de locationSendAllowed). Heartbeat de boot ja era incondicional. Interruptor remoto continua valendo assim que a flag e lida.
+
+Verificacao feita: node --check OK; javac so reclama de simbolos do Android (sem android.jar), nenhum erro de sintaxe; teste Java da logica da noite (virada de mes/ano, 20:00-06:29 = 1 id so) = TUDO OK; CI run 40490002085 (sha 9ac366a) success; APK SHA256 28F5986BE28794F4273A02606D2889D093CADEBB6E30DFD334615A62C522A080 contem night_sent_id; instalado na bancada via modulo (sha em /system/priv-app confere, versionCode 43), logger on-device religado 07:46.
+
+Pendente de validacao em hardware (so possivel a noite): (1) 1 unico envio "antes de dormir" por noite; (2) matar o processo depois do envio (kill) e confirmar que o processo novo NAO reenvia; (3) 06:30 heartbeat normal.
+Risco residual conhecido: relogio do aparelho errado/ajustado no boot muda o id da noite -> no maximo 1 envio extra por ajuste.
+
