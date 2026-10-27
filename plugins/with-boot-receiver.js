@@ -1311,7 +1311,39 @@ public class GpsLocationService extends Service {
     private volatile long serviceStartTime     = 0L; // quando o servico iniciou
     private volatile long lastIpGeoAttemptTime = 0L; // ultima tentativa IP geo
     private volatile long lastCellTowerAttemptTime = 0L; // ultima tentativa torre celular (OpenCelliD)
-    private volatile boolean nightSilenceSent = false; // evita reenvio repetido da ultima localizacao durante o silencio noturno
+    // v2.0.26 (27/10): o envio "antes de dormir" e 1 POR NOITE, nao 1 por processo. Medido na bancada:
+    // o sistema matou o app as 21:11 e o processo novo reenviou (flag em memoria zerava).
+    // Agora a noite enviada fica gravada em disco (id = data em que a noite COMECOU, 20h; antes
+    // das 6h30 ainda e a noite de ontem). Sobrevive a reinicio do app e a reboot.
+    private static final String STATE_PREFS    = "posservice_state";
+    private static final String KEY_NIGHT_SENT = "night_sent_id";
+
+    private String currentNightId() {
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        int nowSec = cal.get(java.util.Calendar.HOUR_OF_DAY) * 3600
+                   + cal.get(java.util.Calendar.MINUTE) * 60
+                   + cal.get(java.util.Calendar.SECOND);
+        int startSec = (ACTIVE_START_HOUR * 60 + ACTIVE_START_MIN) * 60;
+        if (nowSec < startSec) cal.add(java.util.Calendar.DAY_OF_YEAR, -1);
+        return String.format(Locale.US, "%04d%02d%02d",
+                cal.get(java.util.Calendar.YEAR),
+                cal.get(java.util.Calendar.MONTH) + 1,
+                cal.get(java.util.Calendar.DAY_OF_MONTH));
+    }
+
+    private boolean isNightAlreadyCovered() {
+        try {
+            return currentNightId().equals(getSharedPreferences(STATE_PREFS, MODE_PRIVATE).getString(KEY_NIGHT_SENT, ""));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void markNightCovered() {
+        try {
+            getSharedPreferences(STATE_PREFS, MODE_PRIVATE).edit().putString(KEY_NIGHT_SENT, currentNightId()).commit();
+        } catch (Exception ignored) {}
+    }
     // Anti-poisoned-anchor: buffer de candidatos GPS aguardando convergencia
     private final java.util.List<android.location.Location> gpsCandidates =
         new java.util.ArrayList<>();
@@ -1343,6 +1375,9 @@ public class GpsLocationService extends Service {
         // Heartbeat imediato no boot (t=0)
         serviceStartTime = System.currentTimeMillis();
         sendBootHeartbeat();
+        // v2.0.26: se o app (re)iniciou de noite, o heartbeat de boot acima ja e o sinal de vida da noite
+        // - nao gasta outro envio "antes de dormir".
+        if (!isActiveWindow()) markNightCovered();
         // Heartbeat permanente a cada 30s — garante device online mesmo com tela apagada
         scheduleHeartbeat();
         // Auto-update: verifica versao nova 5min apos boot (dispositivo ja estavel)
@@ -1648,7 +1683,6 @@ public class GpsLocationService extends Service {
             if (!AutoUpdater.trackingEnabled) {
                 Log.i(TAG, "Envio desligado remotamente (tracking_enabled=false) — nao enviando nada");
             } else if (isActiveWindow()) {
-                nightSilenceSent = false;
                 long timeSinceSent = System.currentTimeMillis() - lastSentTime;
                 if (timeSinceSent >= 25_000L) {
                     // Expira cache se fix tem mais de 20min sem renovacao.
@@ -1664,8 +1698,8 @@ public class GpsLocationService extends Service {
                         new Thread(this::sendKeepalive).start();
                     }
                 }
-            } else if (!nightSilenceSent) {
-                nightSilenceSent = true;
+            } else if (!isNightAlreadyCovered()) {
+                markNightCovered();
                 android.location.Location loc = lastKnownLocation;
                 Log.i(TAG, "Silencio noturno: enviando ultima localizacao antes de dormir");
                 if (loc != null) {
