@@ -130,3 +130,16 @@ Risco residual conhecido: relogio do aparelho errado/ajustado no boot muda o id 
 - versionCode por versao: 2.0.18=35, .20=37, .21=38, .22=39, .23=40, .24=41, .25=42. Terminais em 2.0.18-2.0.24 (vc < 42) baixam 29,5 MB a cada ~6h (ou a cada reinicio do app) enquanto o latest.json disser 42. Chip: 20 MB/mes. Hipotese forte (NAO medida - backend morto) para os terminais "mudos por dias".
 - Proposta (NAO executada, aguarda OK do Wallacy): congelar latest.json em main com version_code baixo (ex. 1) por commit com "[skip ci]" (nao dispara build). Interruptor remoto tracking_enabled continua valendo. Reversivel por novo commit. Cuidado: o CI sobrescreve latest.json em todo push normal para main -> ajustar o workflow antes do merge da v2.0.26 (ex.: nao publicar version_code novo para auto-update ate a frota estar toda na 2.0.26+).
 
+
+
+## 28/10 (tarde) - Trava de Wi-Fi no download do APK + limiar 100m (commit d17412b, APK 978F7C3D...86A7C)
+
+Autorizacao do Wallacy: "faca tudo que for melhoria" (28/10), congelamento do latest.json aprovado ("sim").
+
+- NAO executado: congelar latest.json em main (version_code=1, commit com [skip ci]). A protecao de seguranca do ambiente bloqueou o push para main ("Production Deploy"); nao foi contornado. Pendente: o Wallacy liberar a acao OU editar o arquivo no site do GitHub (passo a passo dado a ele). main continua em 48983ae.
+- d17412b (v2.0.26-dev): (1) AutoUpdater so baixa o APK em rede sem cobranca (onUnmeteredNetwork: rede conectada e !isActiveNetworkMetered; qualquer erro = nao baixa); so o JSON pequeno usa o chip. (2) MIN_SEND_DIST_M 30 -> 100. (3) addPerm ACCESS_NETWORK_STATE.
+- Prova no aparelho (APK de TESTE, branch descartavel test-wifi-guard apontando o updater para test-latest.json v99): no chip -> "Atualizacao vCode=99 disponivel - NAO baixa pelo chip" e nenhum download; com Wi-Fi ligado (brisa-980917) + app reiniciado -> "Nova versao vCode=99 baixando... Download OK: 175 bytes". Os dois lados funcionam. Arquivo staged de teste removido antes do watcher agir; Wi-Fi do bench desligado de novo.
+- Build real: CI run 40675599269 success, sha d17412b, APK 978F7C3D8EF39D9B04C1D5C63646A6531CF814B303839FF7242B52852AE86A7C, cert fac61745... (igual a frota). Instalado na bancada via modulo, versionCode 43, logger religado ~08:35.
+- Verificacao de codigo: node --check ok; javac so reclama de simbolos do Android.
+- Pendente ainda: teste de "matar o app de noite depois do envio" (fazer depois das 20:00 com este APK); confirmar cert num terminal real da frota; backup da keystore-prod pelo Wallacy; ajuste do workflow antes do merge (CI nao pode religar o download automatico para a frota antiga); painel "pendentes de instalacao" quando o banco voltar.
+
