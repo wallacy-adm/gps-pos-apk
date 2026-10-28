@@ -108,3 +108,25 @@ Verificacao feita: node --check OK; javac so reclama de simbolos do Android (sem
 Pendente de validacao em hardware (so possivel a noite): (1) 1 unico envio "antes de dormir" por noite; (2) matar o processo depois do envio (kill) e confirmar que o processo novo NAO reenvia; (3) 06:30 heartbeat normal.
 Risco residual conhecido: relogio do aparelho errado/ajustado no boot muda o id da noite -> no maximo 1 envio extra por ajuste.
 
+
+
+## 28/10 - Validacao da noite 27->28 (APK 9ac366a) + Fase 0 do plano (assinatura e latest.json)
+
+### Noite 27->28 (log on-device, soak-ondevice-1028)
+- 1 unico "Silencio noturno: enviando" as 20:00:00; nada ate 06:30:00 (heartbeat de abertura). 0 crash. Heartbeat horario cravado no minuto :46:08.
+- Marca persistida confirmada no aparelho: shared_prefs/posservice_state.xml -> night_sent_id=20261027.
+- AutoUpdater: leituras do latest.json 19:47 e 01:52 (gate de 6h OK; a leitura "12h depois" de 26/10 nao se repetiu).
+- AINDA NAO TESTADO: matar o processo de noite depois do envio e confirmar que o processo novo nao reenvia (fazer a noite).
+- Observacao (nao alterado): 5 "Movimento confirmado" no dia, varios de 60-96m (GPS indoor derivando, 2 fixes concordam). Geofence do painel e 250m -> envio < ~100m nao ajuda a detectar "saiu do ponto". Possivel ajuste futuro: limiar maior (ex. max(100m, precisao)). Decisao do Wallacy.
+
+### Fase 0.1 - Assinatura: RESOLVIDA (todos os APKs tem o MESMO certificado)
+- Metodo: leitura do APK Signing Block v2 (script sigparse.py) dos APKs: releases v2.0.14, .16, .18, .20, .21, .22, .23, .24, .25 e todos os builds 2.0.26 (d4e20e8, 65ea60d, 9addf97, 9ac366a, build 18/10). Resultado: SHA-256 do cert comeca com fac61745dc090378 em TODOS.
+- Conclusao: instalar a 2.0.26 POR CIMA da instalada funciona, sem desinstalar, mantendo permissoes e dados -> terminais sem Magisk NAO precisam de migracao unica. A hipotese anterior ("keystore aleatorio a cada build") estava ERRADA para as releases. Logo a perda do app no bench em 18/10 nao foi por assinatura (foi a troca de app de sistema para app comum + MDM).
+- Ressalva: falta confirmar em 1 terminal real da frota (adb/pm path) que o APK instalado tem esse mesmo cert. Backup da keystore-prod continua obrigatorio (nao verifiquei que o cert da keystore-prod e fac617..., exige senha).
+
+### Fase 0.2 - latest.json atual e downloads em terminais antigos
+- latest.json em main = version_code 42 (2.0.25), apk_url release v2.0.25 (29,5 MB), tracking_enabled true.
+- Codigo das tags v2.0.20, v2.0.22 e v2.0.25 (AutoUpdater): a cada 6h (gate em MEMORIA, zera a cada reinicio do processo) le o latest.json e, se latestCode > versionCode local, BAIXA o APK inteiro (29,5 MB) por qualquer rede, sem trava de Wi-Fi e sem cache (cache so na 2.0.26). Chamadores: 5 min apos start do servico e todo tick de heartbeat.
+- versionCode por versao: 2.0.18=35, .20=37, .21=38, .22=39, .23=40, .24=41, .25=42. Terminais em 2.0.18-2.0.24 (vc < 42) baixam 29,5 MB a cada ~6h (ou a cada reinicio do app) enquanto o latest.json disser 42. Chip: 20 MB/mes. Hipotese forte (NAO medida - backend morto) para os terminais "mudos por dias".
+- Proposta (NAO executada, aguarda OK do Wallacy): congelar latest.json em main com version_code baixo (ex. 1) por commit com "[skip ci]" (nao dispara build). Interruptor remoto tracking_enabled continua valendo. Reversivel por novo commit. Cuidado: o CI sobrescreve latest.json em todo push normal para main -> ajustar o workflow antes do merge da v2.0.26 (ex.: nao publicar version_code novo para auto-update ate a frota estar toda na 2.0.26+).
+
