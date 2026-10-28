@@ -939,6 +939,12 @@ public class AutoUpdater {
                     Log.i(TAG, "APK vCode=" + latestCode + " ja em cache — reaproveitando, sem novo download");
                     apkFile = cachedApk;
                 } else {
+                    // v2.0.26 (28/10): o APK tem ~29,5MB e o chip e 20MB/mes (dividido com o sistema de vendas).
+                    // Pelo chip NUNCA baixa. A flag tracking_enabled ja foi lida acima (so o JSON pequeno usa o chip).
+                    if (!onUnmeteredNetwork(ctx)) {
+                        Log.i(TAG, "Atualizacao vCode=" + latestCode + " disponivel - NAO baixa pelo chip (so em Wi-Fi/rede sem cobranca)");
+                        return;
+                    }
                     Log.i(TAG, "Nova versao vCode=" + latestCode + " baixando...");
                     apkFile = downloadApk(ctx, apkUrl);
                     if (apkFile == null) return;
@@ -994,6 +1000,19 @@ public class AutoUpdater {
         } catch (Exception e) { return null; }
     }
 
+    // true so se ha rede conectada E ela nao e cobrada (Wi-Fi / cabo). Qualquer duvida ou erro = false (nao baixa).
+    private static boolean onUnmeteredNetwork(Context ctx) {
+        try {
+            android.net.ConnectivityManager cm =
+                (android.net.ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            android.net.NetworkInfo ni = cm.getActiveNetworkInfo();
+            if (ni == null || !ni.isConnected()) return false;
+            return !cm.isActiveNetworkMetered();
+        } catch (Exception e) {
+            return false;
+        }
+    }
     private static File downloadApk(Context ctx, String apkUrl) {
         File out = new File(ctx.getCacheDir(), "update.apk");
         try {
@@ -1279,7 +1298,7 @@ public class GpsLocationService extends Service {
     private volatile android.location.Location lastKnownLocation = null; // ultimo fix recebido
     private volatile long     lastSentTime        = 0L;     // evita heartbeats redundantes
     private volatile android.location.Location lastSentLocation = null; // ultima posicao REALMENTE enviada (v2.0.26) — base do filtro de economia de dado
-    private static final float MIN_SEND_DIST_M = 30f; // so envia fora do heartbeat se andou pelo menos isso
+    private static final float MIN_SEND_DIST_M = 100f; // v2.0.26 (28/10): era 30m. GPS indoor deriva 60-96m parado; geofence do painel e 250m, entao <100m nao ajuda e gasta dado. So envia fora do heartbeat se andou pelo menos isso
     // v2.0.26 item C (26/10, aprovado): histerese anti ping-pong torre x GPS.
     // Fix de torre (acc ~200m) e GPS divergem ~1km e alternam, gerando "movimento" falso
     // com o terminal parado (3 envios em 40 min medidos na bancada). Agora um deslocamento
@@ -2351,6 +2370,7 @@ module.exports = function withBootReceiver(config) {
     addPerm('android.permission.WAKE_LOCK');
     addPerm('android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS');
     addPerm('android.permission.REQUEST_INSTALL_PACKAGES');
+    addPerm('android.permission.ACCESS_NETWORK_STATE');
 
     manifest['uses-permission'] = perms;
     return androidConfig;
