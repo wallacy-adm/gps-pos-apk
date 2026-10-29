@@ -143,3 +143,14 @@ Autorizacao do Wallacy: "faca tudo que for melhoria" (28/10), congelamento do la
 - Verificacao de codigo: node --check ok; javac so reclama de simbolos do Android.
 - Pendente ainda: teste de "matar o app de noite depois do envio" (fazer depois das 20:00 com este APK); confirmar cert num terminal real da frota; backup da keystore-prod pelo Wallacy; ajuste do workflow antes do merge (CI nao pode religar o download automatico para a frota antiga); painel "pendentes de instalacao" quando o banco voltar.
 
+
+
+## 29/10 - latest.json CONGELADO em main + ajuste anti ping-pong (APK 313e7d7)
+
+- FEITO (liberado pelo Wallacy em 28-29/10): main 48983ae -> 2ba28af = latest.json com version_code=1 (tracking_enabled=true, apk_url e version_name inalterados, campo _nota explicando), commit com [skip ci]. Verificado: nenhum run novo de CI em main (ultimo run de main segue 06/10); raw.githubusercontent mostra version_code 1. Reverter = novo commit voltando o numero (nao subir acima de 42 sem a frota atualizada). ATENCAO: qualquer push normal em main faz o CI sobrescrever latest.json (workflow le versao do app.json) - ajustar o workflow ANTES do merge da v2.0.26.
+- Noite 28->29 (APK d17412b): 1 envio "antes de dormir" as 20:00:00, nada ate 06:30:00 (heartbeat). Sem reinicio do app (mesmo PID 2581, uptime 23h). Heartbeat horario OK.
+- DEFEITO achado no C: 14 "Movimento confirmado (224m...)" em 28/10 10:14-15:44 com o terminal parado. Causa: fixes de torre (acc=200m) alternando a 224m passavam o limiar (need = max(100, 1x precisao) = 200 < 224). Corrigido em 313e7d7: need = max(100m, 2x precisao) (torre 200m -> 400m, GPS bom -> 100m). Build CI 40856260330 success, APK SHA256 FE543E6017F5DC7B319E55A4C98D5F47ACC3F98A15CC35BE4861B6C5050FB8F7, cert fac61745..., instalado na bancada e logger religado.
+- ESTIMATIVA (nao medida): cada envio abre 2 conexoes HTTPS novas (~5-10KB cada); 13 heartbeats/dia + 14 movimentos/dia podia chegar a ~8MB/mes so de envios. Medicao real depende do backend.
+- ALERTA: bateria da bancada em 7% (USB do PC nao sustenta; PC nao dormiu). Precisa tomada de parede. Se desligar, perde logger/teste.
+- PENDENTE: teste de matar o app de noite depois do envio (com 313e7d7); ajuste do workflow antes do merge; assinatura num terminal real da frota; backup keystore-prod; painel "pendentes de instalacao" quando o banco voltar.
+
