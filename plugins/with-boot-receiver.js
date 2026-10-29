@@ -1309,7 +1309,10 @@ public class GpsLocationService extends Service {
     private static final long PENDING_MOVE_WINDOW_MS = 5 * 60_000L;
     private boolean moveConfirmed(android.location.Location loc, float distFromLastSent) {
         if (lastSentLocation == null) return true; // primeiro envio apos iniciar: sempre
-        float need = Math.max(MIN_SEND_DIST_M, loc.hasAccuracy() ? loc.getAccuracy() : 0f);
+        // v2.0.26 (29/10): era 1x a precisao. Medido na bancada: fix de torre (acc=200m) e outro fix a 224m de distancia
+        // alternavam e passavam (224 > 200) = 14 envios/dia com o terminal parado. Agora precisa passar de 2x a precisao
+        // do proprio fix (torre 200m -> 400m; GPS 10m -> piso de 100m).
+        float need = Math.max(MIN_SEND_DIST_M, loc.hasAccuracy() ? 2f * loc.getAccuracy() : 0f);
         if (distFromLastSent < need) { pendingMove = null; return false; }
         long now = System.currentTimeMillis();
         android.location.Location p = pendingMove;
