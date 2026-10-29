@@ -1,6 +1,7 @@
 {
-  "version_code": 42,
+  "version_code": 1,
   "version_name": "2.0.25",
   "apk_url": "https://github.com/wallacy-adm/gps-pos-apk/releases/download/v2.0.25/gps-pos-v2.0.25.apk",
-  "tracking_enabled": true
+  "tracking_enabled": true,
+  "_nota": "28/10/2026: atualizacao automatica PAUSADA de proposito (version_code baixo). Terminais antigos baixavam o APK de 29,5MB pelo chip a cada 6h. Reativar so quando toda a frota estiver na 2.0.26 ou superior."
 }
