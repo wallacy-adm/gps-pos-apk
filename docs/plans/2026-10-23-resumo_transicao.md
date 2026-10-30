@@ -154,3 +154,15 @@ Autorizacao do Wallacy: "faca tudo que for melhoria" (28/10), congelamento do la
 - ALERTA: bateria da bancada em 7% (USB do PC nao sustenta; PC nao dormiu). Precisa tomada de parede. Se desligar, perde logger/teste.
 - PENDENTE: teste de matar o app de noite depois do envio (com 313e7d7); ajuste do workflow antes do merge; assinatura num terminal real da frota; backup keystore-prod; painel "pendentes de instalacao" quando o banco voltar.
 
+
+
+## 30/10 - Noite 29->30 (APK 313e7d7) + workflow protegido para o merge
+
+- Resultado da noite (log on-device, soak-ondevice-1030): 0 "Movimento confirmado" em 24h com o terminal parado (era 14 no dia anterior) -> ajuste 2x precisao FUNCIONA; 3 "Possivel movimento" (803/988/923m, torre) ficaram so pendentes. 13 heartbeats horarios, 1 "Silencio noturno: enviando" as 20:00:00, nada ate 06:30:00, 0 crash, sem reinicio (uptime ~24h), bateria 84% (Wallacy ligou na tomada).
+- Congelamento confirmado no aparelho: AutoUpdater leu "local=43 remoto=1 | tracking=true" (29/10 07:27, 13:27, 19:28; 30/10 01:30) - gate de 6h ok.
+- Posservice_state.xml: night_sent_id=20261029 persistido.
+- Teste de matar o app de noite AUTOMATIZADO no PC: script killtest.ps1 mata o processo as 20:30 de 30/10 e as 03:00 de 31/10, espera 15 min e grava em test-build-2026/killtest-30-10.txt (prefs antes/depois, pid, linhas de envio). Esperado: NENHUMA linha "Silencio noturno: enviando" depois do kill (o heartbeat de boot a noite e incondicional e silencioso = 1 envio por reinicio, inerente).
+- Workflow (commit 1a9902a, so v2.0.26-dev): passo "Atualizar latest.json" preserva o version_code existente (padrao 1) e grava o codigo novo em released_version_code. Testado em bash real em 5 cenarios (congelado, tracking false, ausente, corrompido, ja liberado 42) + YAML validado (js-yaml). Simulacao de merge (git merge-tree v2.0.26-dev -> main): SEM conflito; latest.json resultante continua congelado; app.json = versionCode 43.
+- Efeito colateral conhecido do CI (inalterado): se latest.json estiver ausente/corrompido grava tracking_enabled=false (kill switch ligado). Nao mexido.
+- PENDENTE: ler killtest (31/10 cedo); assinatura num terminal real da frota; backup keystore-prod; painel "pendentes de instalacao" quando o banco voltar; roteiro de instalacao manual nos terminais sem Magisk; decidir merge (so com OK explicito).
+
