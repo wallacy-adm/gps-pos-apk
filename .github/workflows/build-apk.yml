@@ -89,13 +89,20 @@ jobs:
       - name: Atualizar latest.json
         if: github.ref == 'refs/heads/main'
         run: |
+          # 29/10/2026: a atualizacao automatica da frota esta PAUSADA de proposito (version_code baixo no latest.json).
+          # Terminais antigos baixavam o APK de ~29,5MB pelo chip (plano de 20MB/mes). O CI NAO pode religar isso:
+          # preserva o version_code que ja esta no arquivo (padrao 1 se ilegivel). Para reativar, so quando a frota
+          # toda estiver na 2.0.26+, edite o version_code de latest.json a mao.
           TRACKING=$(node -p "JSON.parse(require('fs').readFileSync('./latest.json','utf8')).tracking_enabled === true ? 'true' : 'false'" 2>/dev/null || echo "false")
+          FROZEN=$(node -p "const j=JSON.parse(require('fs').readFileSync('./latest.json','utf8')); Number.isInteger(j.version_code) ? j.version_code : 1" 2>/dev/null || echo "1")
           cat > latest.json << EOF
           {
-            "version_code": ${{ steps.version.outputs.code }},
+            "version_code": $FROZEN,
             "version_name": "${{ steps.version.outputs.name }}",
             "apk_url": "https://github.com/wallacy-adm/gps-pos-apk/releases/download/${{ steps.version.outputs.tag }}/${{ steps.version.outputs.apk_name }}",
-            "tracking_enabled": $TRACKING
+            "tracking_enabled": $TRACKING,
+            "released_version_code": ${{ steps.version.outputs.code }},
+            "_nota": "Atualizacao automatica pausada: version_code e preservado pelo CI. Reativar so com a frota toda na 2.0.26+."
           }
           EOF
           git config user.name "github-actions[bot]"
