@@ -48,8 +48,9 @@ function App() {
       // 1b. Garante o servico de rastreio ligado ja nesta abertura (instalacao nova sem Magisk:
       // nenhum boot/atualizacao dispara o servico). Idempotente.
       try {
-        const iniciou = await withTimeout(NativeModules.ImeiModule?.startGpsService?.() ?? Promise.resolve(false), 2_000);
-        console.log('startGpsService ->', iniciou);
+        console.log('startGpsService tipo:', typeof NativeModules.ImeiModule?.startGpsService, '| ImeiModule:', typeof NativeModules.ImeiModule);
+        const iniciou = await withTimeout(NativeModules.ImeiModule?.startGpsService?.() ?? Promise.resolve('metodo-ausente'), 2_000);
+        console.log('startGpsService ->', String(iniciou));
       } catch (_) {}
 
       // 1c. Isenção de otimização de bateria — só pergunta UMA VEZ (na

@@ -316,9 +316,9 @@ public class ImeiModule extends ReactContextBaseJavaModule {
             }
             android.util.Log.i("ImeiModule", "startGpsService: servico solicitado");
             promise.resolve(true);
-        } catch (Exception e) {
+        } catch (Throwable e) {
             android.util.Log.w("ImeiModule", "startGpsService falhou: " + e);
-            promise.resolve(false);
+            promise.resolve("ERRO: " + e);
         }
     }
 
