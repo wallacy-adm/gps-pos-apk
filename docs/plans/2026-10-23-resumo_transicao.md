@@ -166,3 +166,13 @@ Autorizacao do Wallacy: "faca tudo que for melhoria" (28/10), congelamento do la
 - Efeito colateral conhecido do CI (inalterado): se latest.json estiver ausente/corrompido grava tracking_enabled=false (kill switch ligado). Nao mexido.
 - PENDENTE: ler killtest (31/10 cedo); assinatura num terminal real da frota; backup keystore-prod; painel "pendentes de instalacao" quando o banco voltar; roteiro de instalacao manual nos terminais sem Magisk; decidir merge (so com OK explicito).
 
+
+
+## 31/10 - Teste de matar o app de noite: APROVADO (APK 313e7d7)
+
+- Contexto: queda de energia em 30/10 desligou o PC (19:51 religou); script killtest.ps1 religado 20:01.
+- KILL 1 (20:30, 30 min depois do envio das 20:00): pid 2570 -> 17204; prefs antes/depois iguais (night_sent_id=20261030); apos o kill so "GPS_PROVIDER iniciado" e "Envio por localizacao suspenso"; NENHUM novo "Silencio noturno: enviando".
+- KILL 2 (03:00): pid 17204 -> 2088; prefs iguais; apos o kill so "GPS_PROVIDER iniciado" e "suspenso"; NENHUM novo "Silencio noturno: enviando". Contagem no arquivo = 2 (as das noites 29/10 e 30/10 as 20:00, ambas ANTES dos kills).
+- Conclusao: o envio "antes de dormir" agora e 1 por noite e sobrevive a morte do processo (comportamento esperado: o heartbeat de boot de noite e silencioso e incondicional).
+- ALERTA: as 06:30 de 31/10 o terminal de bancada nao aparece no adb (nenhum dispositivo). Bateria estava em 38% as 20:01 de 30/10, so no USB do PC (sem tomada de parede) -> provavel desligamento por bateria. Logs da noite ficam em /data/local/tmp/soak no aparelho (sobrevivem ao desligamento; puxar depois de religar).
+
