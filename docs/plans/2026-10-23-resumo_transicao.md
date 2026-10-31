@@ -215,3 +215,11 @@ Autorizacao do Wallacy: "faca tudo que for melhoria" (28/10), congelamento do la
 - CORRECAO de uma afirmacao minha anterior (feita sem checar o codigo): o id do terminal vem do Java nativo DeviceIdentifier (IMEI preferido, cache em SharedPreferences, migra sozinho de Android ID para IMEI). O JS device-id.ts/heartbeat-service.ts e codigo morto (nenhum importador). Logo registrar o ImeiPackage NAO muda o id nem duplica terminais.
 - Efeito real de registrar o ImeiPackage: o index.tsx passaria a abrir o dialogo do sistema de isencao de bateria 1 vez por terminal, no 1o boot normal apos a atualizacao (o BootReceiver abre a MainActivity em boot normal; em MY_PACKAGE_REPLACED nao). Dialogo de sistema fica na tela ate alguem tocar, por cima do app de vendas. Decisao: NAO registrar o ImeiPackage na v2.0.26.
 - Alternativa testada no Sunmi V2 (Android 7.1.1) SEM root e SEM tela: 'adb shell dumpsys deviceidle whitelist +com.system.posservice' funciona (listado como user,com.system.posservice,UID). NAO persiste apos reboot (lista vazia depois) => precisa ser reaplicado a cada boot. Em terminal com Magisk isso cabe no service.sh do modulo (roda todo boot, como root). Pendente de OK do Wallacy (muda o modulo, nao o app); sem Magisk continua sem isencao automatica.
+
+
+## 31/10 - Modulo Magisk: isencao de bateria a cada boot (OK do Wallacy)
+
+- build_magisk_module.py (fora do repo, backup em C:\Users\walla\build_magisk_module.py.bak-31out): no laco do service.sh (a cada 5 min) acrescentei: se o app nao esta na lista 'dumpsys deviceidle whitelist', roda 'dumpsys deviceidle whitelist +com.system.posservice'. Sem dialogo. Reaplica sozinho porque a lista some no reboot (medido).
+- APK_SRC do modulo agora = gps-pos-v2.0.26-01d12a3.apk (inclui a correcao de iniciar o servico ao abrir). Zip: C:\Users\walla\Downloads\GPS_POS_MagiskModule_v2026.zip (14,7MB); o anterior (313e7d7) ficou em ..._v2026_313e7d7.zip.
+- Verificado: 'sh -n' no service.sh extraido do zip = OK; trecho testado no Sunmi como shell: adiciona 1x, 2a passada nao duplica, limpou depois.
+- NAO verificado ainda: execucao real como root no boot do terminal de bancada (precisa dele ligado no PC). Nao declarar pronto antes disso.
