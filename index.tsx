@@ -45,6 +45,12 @@ function App() {
         await withTimeout(requestPermissions(), 5_000);
       } catch (_) {}
 
+      // 1b. Garante o servico de rastreio ligado ja nesta abertura (instalacao nova sem Magisk:
+      // nenhum boot/atualizacao dispara o servico). Idempotente.
+      try {
+        await withTimeout(NativeModules.ImeiModule?.startGpsService?.() ?? Promise.resolve(false), 2_000);
+      } catch (_) {}
+
       // 1c. Isenção de otimização de bateria — só pergunta UMA VEZ (na
       // instalação/primeiro boot, quando alguém está fisicamente ali pra
       // tocar "Permitir"). Sem isso, o Android/fabricante pode matar o

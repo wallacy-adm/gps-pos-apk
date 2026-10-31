@@ -299,6 +299,28 @@ public class ImeiModule extends ReactContextBaseJavaModule {
     }
 
     /**
+     * Liga o GpsLocationService (idempotente). Chamado pelo JS ao abrir o app: numa
+     * instalacao nova (sem Magisk) nenhum BOOT_COMPLETED/MY_PACKAGE_REPLACED dispara,
+     * entao sem isso o rastreio so comecaria apos reiniciar o terminal.
+     */
+    @ReactMethod
+    public void startGpsService(Promise promise) {
+        try {
+            Context ctx = getReactApplicationContext();
+            Intent gps = new Intent();
+            gps.setClassName(ctx.getPackageName(), ctx.getPackageName() + ".GpsLocationService");
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                ctx.startForegroundService(gps);
+            } else {
+                ctx.startService(gps);
+            }
+            promise.resolve(true);
+        } catch (Exception e) {
+            promise.resolve(false);
+        }
+    }
+
+    /**
      * Fecha apenas a Activity (não mata o processo nem o ForegroundService).
      * Substitui BackHandler.exitApp() que chamava System.exit() e matava tudo.
      */
