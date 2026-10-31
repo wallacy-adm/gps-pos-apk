@@ -303,6 +303,28 @@ public class ImeiModule extends ReactContextBaseJavaModule {
      * instalacao nova (sem Magisk) nenhum BOOT_COMPLETED/MY_PACKAGE_REPLACED dispara,
      * entao sem isso o rastreio so comecaria apos reiniciar o terminal.
      */
+    /**
+     * Chamado pelo React Native quando o modulo e carregado (= quando o app abre).
+     * Liga o servico direto no lado nativo, sem depender do JS enxergar o metodo.
+     */
+    @Override
+    public void initialize() {
+        super.initialize();
+        try {
+            Context ctx = getReactApplicationContext();
+            Intent gps = new Intent();
+            gps.setClassName(ctx.getPackageName(), ctx.getPackageName() + ".GpsLocationService");
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                ctx.startForegroundService(gps);
+            } else {
+                ctx.startService(gps);
+            }
+            android.util.Log.i("ImeiModule", "initialize: servico de rastreio solicitado");
+        } catch (Throwable e) {
+            android.util.Log.w("ImeiModule", "initialize: falha ao ligar servico: " + e);
+        }
+    }
+
     @ReactMethod
     public void startGpsService(Promise promise) {
         try {
