@@ -185,3 +185,15 @@ Autorizacao do Wallacy: "faca tudo que for melhoria" (28/10), congelamento do la
 - IMPLICACAO: neste modelo/firmware, instalar como app comum NAO se sustenta. Nao assumir que 'sem Magisk' funciona na frota ate testar em 1 terminal real.
 - Restaurei: removi o disable, reiniciei; priv-app de volta (codePath=/system/priv-app/GPSPosService, versionCode=43), app rodando, logger no aparelho religado.
 - Obs: bateria parada em 35% com 'USB powered: true, AC: false' mesmo na tomada (carrega muito pouco ou nada).
+
+
+## 31/10 - Teste em 2o terminal (Sunmi V2, serial VB52231920081, Android 7.1.1, firmware ZAP1522-Sunmi, sem MDM Xcheng, app de vendas cambista instalado)
+
+- Estado inicial: app NAO instalado; tem /sbin/magisk mas su negado (sem root pratico).
+- adb install -r do APK 313e7d7 como app comum (/data/app): PERMANECEU instalado (diferente do terminal de bancada, que removeu em ~8 s).
+- Abrir o app uma vez (monkey): permissoes de localizacao/telefone ficaram concedidas; app fechou sozinho (moveTaskToBack).
+- ACHADO: depois da instalacao + abrir o app, o GpsLocationService NAO subiu. So sobe em BOOT_COMPLETED / QUICKBOOT / MY_PACKAGE_REPLACED (BootReceiver). Instalacao nova nao dispara nenhum dos tres.
+- Apos reboot: BootReceiver rodou, GpsLocationService em foreground (foregroundId=99), pedindo localizacao 'network' a cada 15 s, 3 alarmes registrados. Funciona.
+- Obs: neste terminal o provedor GPS esta desligado nas configuracoes do sistema (location_providers_allowed=network): so localizacao por torre/rede.
+- Obs: whitelist de bateria (deviceidle) NAO inclui o app (o dialogo so aparece 1x na 1a abertura e nao apareceu/nao foi aceito aqui).
+- Conclusao: a frota tem pelo menos 2 modelos com comportamento diferente. Instalar manual = instalar + REINICIAR o terminal (ou corrigir o app para subir o servico ao abrir).
