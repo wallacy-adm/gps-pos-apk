@@ -176,3 +176,12 @@ Autorizacao do Wallacy: "faca tudo que for melhoria" (28/10), congelamento do la
 - Conclusao: o envio "antes de dormir" agora e 1 por noite e sobrevive a morte do processo (comportamento esperado: o heartbeat de boot de noite e silencioso e incondicional).
 - ALERTA: as 06:30 de 31/10 o terminal de bancada nao aparece no adb (nenhum dispositivo). Bateria estava em 38% as 20:01 de 30/10, so no USB do PC (sem tomada de parede) -> provavel desligamento por bateria. Logs da noite ficam em /data/local/tmp/soak no aparelho (sobrevivem ao desligamento; puxar depois de religar).
 
+
+
+## 31/10 - Teste 'sem Magisk' no terminal de bancada (O10202230269, Android 9)
+
+- Desativei o modulo (arquivo disable) e reiniciei: app sumiu (sem priv-app). Instalei o APK 313e7d7 via adb como app comum: 'Success' (07:44:43 e 07:46:30).
+- RESULTADO: o pacote foi REMOVIDO ~8 s depois nas 2 tentativas (07:46:30 instalou; 07:46:38 'deletePackageX'). Quem removeu NAO esta identificado (logcat nao mostra o chamador). Suspeitos: com.xcheng.mdm / com.pos.mdmservice / com.xcheng.store (todos apps de sistema, nao removiveis).
+- IMPLICACAO: neste modelo/firmware, instalar como app comum NAO se sustenta. Nao assumir que 'sem Magisk' funciona na frota ate testar em 1 terminal real.
+- Restaurei: removi o disable, reiniciei; priv-app de volta (codePath=/system/priv-app/GPSPosService, versionCode=43), app rodando, logger no aparelho religado.
+- Obs: bateria parada em 35% com 'USB powered: true, AC: false' mesmo na tomada (carrega muito pouco ou nada).
