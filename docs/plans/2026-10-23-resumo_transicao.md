@@ -197,3 +197,14 @@ Autorizacao do Wallacy: "faca tudo que for melhoria" (28/10), congelamento do la
 - Obs: neste terminal o provedor GPS esta desligado nas configuracoes do sistema (location_providers_allowed=network): so localizacao por torre/rede.
 - Obs: whitelist de bateria (deviceidle) NAO inclui o app (o dialogo so aparece 1x na 1a abertura e nao apareceu/nao foi aceito aqui).
 - Conclusao: a frota tem pelo menos 2 modelos com comportamento diferente. Instalar manual = instalar + REINICIAR o terminal (ou corrigir o app para subir o servico ao abrir).
+
+
+## 31/10 - CAUSA RAIZ achada + correcao validada (commit 01d12a3, APK 9AAA002F...)
+
+- Expo SDK 54 gera MainApplication.kt (Kotlin). As regex do plugin so casam Java => ImeiPackage NUNCA foi registrado, em NENHUMA versao. Prova: no JS, NativeModules.ImeiModule e um objeto vazio (Object.keys = []), startGpsService/getImei/etc ausentes.
+- CONSEQUENCIA ANTIGA (nao corrigida de proposito, precisa de decisao do Wallacy): getImei nunca funcionou (id do terminal cai no Android ID) e o pedido de isencao de bateria (Doze) nunca abre em nenhum terminal. Registrar o ImeiPackage agora MUDARIA o id dos terminais na frota (IMEI no lugar do Android ID) => risco de terminais duplicados no painel. NAO fazer sem decisao.
+- Correcao desta rodada: o plugin passa a inserir em MainApplication.kt (onCreate) um start do GpsLocationService (try/catch, idempotente). Nao mexe em IMEI/id.
+- Tentativas anteriores via ImeiModule/JS (c1505af, 194a698, 15144a4, 71fe18a, 6685493) foram revertidas no diff final (diferenca liquida vs 16d7be0: +16 linhas so no plugin).
+- TESTE (Sunmi V2, Android 7.1.1, instalacao nova como app comum, SEM reiniciar): servico em foreground (id 99) e pedindo localizacao a cada 15 s em ate 5 s depois de abrir o app. APROVADO.
+- Obs de teste: com a tela apagada o app nao termina o fluxo de abertura; em campo a pessoa abre com a tela ligada.
+- Falta validar: reboot (BootReceiver + Application.onCreate juntos), terminal bancada (priv-app/Magisk) com este APK, e teste sem Magisk de verdade.
