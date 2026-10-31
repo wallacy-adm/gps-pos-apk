@@ -299,52 +299,6 @@ public class ImeiModule extends ReactContextBaseJavaModule {
     }
 
     /**
-     * Liga o GpsLocationService (idempotente). Chamado pelo JS ao abrir o app: numa
-     * instalacao nova (sem Magisk) nenhum BOOT_COMPLETED/MY_PACKAGE_REPLACED dispara,
-     * entao sem isso o rastreio so comecaria apos reiniciar o terminal.
-     */
-    /**
-     * Chamado pelo React Native quando o modulo e carregado (= quando o app abre).
-     * Liga o servico direto no lado nativo, sem depender do JS enxergar o metodo.
-     */
-    @Override
-    public void initialize() {
-        super.initialize();
-        try {
-            Context ctx = getReactApplicationContext();
-            Intent gps = new Intent();
-            gps.setClassName(ctx.getPackageName(), ctx.getPackageName() + ".GpsLocationService");
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                ctx.startForegroundService(gps);
-            } else {
-                ctx.startService(gps);
-            }
-            android.util.Log.i("ImeiModule", "initialize: servico de rastreio solicitado");
-        } catch (Throwable e) {
-            android.util.Log.w("ImeiModule", "initialize: falha ao ligar servico: " + e);
-        }
-    }
-
-    @ReactMethod
-    public void startGpsService(Promise promise) {
-        try {
-            Context ctx = getReactApplicationContext();
-            Intent gps = new Intent();
-            gps.setClassName(ctx.getPackageName(), ctx.getPackageName() + ".GpsLocationService");
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                ctx.startForegroundService(gps);
-            } else {
-                ctx.startService(gps);
-            }
-            android.util.Log.i("ImeiModule", "startGpsService: servico solicitado");
-            promise.resolve(true);
-        } catch (Throwable e) {
-            android.util.Log.w("ImeiModule", "startGpsService falhou: " + e);
-            promise.resolve("ERRO: " + e);
-        }
-    }
-
-    /**
      * Fecha apenas a Activity (não mata o processo nem o ForegroundService).
      * Substitui BackHandler.exitApp() que chamava System.exit() e matava tudo.
      */
@@ -2445,6 +2399,22 @@ module.exports = function withBootReceiver(config) {
       );
     }
 
+    // v2.0.26: o Expo SDK 54 gera MainApplication.kt (Kotlin), entao as regex Java acima
+    // nao casam (ImeiPackage nunca e registrado - comportamento antigo, mantido de
+    // proposito para nao mudar IMEI/id do terminal). Aqui so liga o GpsLocationService
+    // quando o processo do app inicia: numa instalacao nova (sem Magisk) nenhum
+    // BOOT_COMPLETED/MY_PACKAGE_REPLACED dispara, e sem isso o rastreio so comecaria
+    // apos reiniciar o terminal. Idempotente (onStartCommand so religa se nao estiver ouvindo).
+    if (appConfig.modResults.language === 'kt' && !src.includes('PosService:startGps')) {
+      src = src.replace(
+        /(override fun onCreate\(\) \{\s*\n\s*super\.onCreate\(\)[^\n]*\n)/,
+        '$1    try { // PosService:startGps\n' +
+        '      val gps = android.content.Intent()\n' +
+        '      gps.setClassName(packageName, packageName + ".GpsLocationService")\n' +
+        '      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) startForegroundService(gps) else startService(gps)\n' +
+        '    } catch (t: Throwable) { android.util.Log.w("PosService", "falha ao ligar GpsLocationService: " + t) }\n'
+      );
+    }
     appConfig.modResults.contents = src;
     return appConfig;
   });
