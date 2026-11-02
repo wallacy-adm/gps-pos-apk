@@ -1298,7 +1298,7 @@ public class GpsLocationService extends Service {
     private volatile android.location.Location lastKnownLocation = null; // ultimo fix recebido
     private volatile long     lastSentTime        = 0L;     // evita heartbeats redundantes
     private volatile android.location.Location lastSentLocation = null; // ultima posicao REALMENTE enviada (v2.0.26) — base do filtro de economia de dado
-    private static final float MIN_SEND_DIST_M = 100f; // v2.0.26 (28/10): era 30m. GPS indoor deriva 60-96m parado; geofence do painel e 250m, entao <100m nao ajuda e gasta dado. So envia fora do heartbeat se andou pelo menos isso
+    private static final float MIN_SEND_DIST_M = 200f; // v2.0.26 (02/11): era 100m; bancada parada oscilou ate 109m (4 falsos em 36h) - 200m fica abaixo do raio 250m do painel. Antes (28/10): era 30m. GPS indoor deriva 60-96m parado; geofence do painel e 250m, entao <100m nao ajuda e gasta dado. So envia fora do heartbeat se andou pelo menos isso
     // v2.0.26 item C (26/10, aprovado): histerese anti ping-pong torre x GPS.
     // Fix de torre (acc ~200m) e GPS divergem ~1km e alternam, gerando "movimento" falso
     // com o terminal parado (3 envios em 40 min medidos na bancada). Agora um deslocamento
