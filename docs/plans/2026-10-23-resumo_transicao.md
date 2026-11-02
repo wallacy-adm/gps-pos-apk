@@ -232,3 +232,12 @@ Autorizacao do Wallacy: "faca tudo que for melhoria" (28/10), congelamento do la
 - 4 'Movimento confirmado' em ~36 h com o terminal PARADO (19:44 128m, 19:55 103m, 06:46 147m, 07:24 119m do ultimo envio, 2 fixes GPS acc~8m concordando): deriva de GPS dentro do predio passando de 100m. ~2-3 envios extras/dia (antes da v2.0.26: centenas). Aceitavel, mas nao e zero; se quiser, subir o limiar ou exigir 3 fixes.
 - Envios todos falham com DNS (backend morto), logo consumo de dado real continua nao mensuravel.
 - Lovable (02/11): gps-cg com frontend no ar; get_database_status diz enabled, mas query_database retorna 'Database is possibly not accessible' e o DNS de kyxowmjriiqzjacwltja.supabase.co continua sem resolver (PC e terminal). Saldo de creditos nao e legivel por ferramenta.
+
+
+## 02/11 - Lovable: backend estava PAUSADO (nao deletado); religado; ponta a ponta confirmada
+
+- Via chat do Lovable (plan_mode, 1 credito; depois 1 mensagem de aprovacao): supabase--cloud_status = paused. Plano Free: 5 creditos DIARIOS (reset 21h Sao Paulo) - nao sao 5 unicos; cota Cloud 20/mes (nao legivel por ferramenta). Agente executou supabase--resume. DNS voltou (172.64.149.246), /rest/v1/devices OK em ~4 min. Nada de codigo/schema/dados alterado.
+- Dados intactos: devices 30, locations 869.867, events 814, geofences 23, settings 3, trigger trg_eval_location_v3 existe. Ultima leitura gravada: 17/10 12:43 UTC (frota inteira silenciosa 17/10 -> 02/11). Coluna de tempo de locations = recorded_at (nao created_at).
+- PROVA ponta a ponta: terminal de bancada = device 'Raquel' (serial 861536050976175, app_version 2.0.26) gravou last_seen_at 2026-11-02 11:00:33 UTC logo apos eu reiniciar o app (heartbeat de boot).
+- RISCO: frota em versoes antigas (2.0.20-2.0.25) volta a enviar a cada 15-30 s => cota Cloud de 20/mes pode acabar em ~10 dias e o backend pausa de novo (historico: 21,1 creditos em 30 dias, 96% 'Database server'). Free nao compra credito extra.
+- ERRO MEU (31/10): apos o teste 'sem Magisk' no bancada, restaurei o Magisk mas NAO conferi as permissoes de localizacao; o app ficou com 'Permissao negada: gps provider requires ACCESS_FINE_LOCATION' (126 ocorrencias, 07:53-13:38 de 31/10) => bancada NAO rastreou no sabado, inclusive no passeio longe do perimetro. As permissoes voltaram quando o modulo novo foi reinstalado (21:24). Licao: apos qualquer teste que desinstale o app, conferir 'dumpsys package' permissoes + 1 fix GPS no log antes de declarar restaurado.
