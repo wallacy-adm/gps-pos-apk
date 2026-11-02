@@ -241,3 +241,13 @@ Autorizacao do Wallacy: "faca tudo que for melhoria" (28/10), congelamento do la
 - PROVA ponta a ponta: terminal de bancada = device 'Raquel' (serial 861536050976175, app_version 2.0.26) gravou last_seen_at 2026-11-02 11:00:33 UTC logo apos eu reiniciar o app (heartbeat de boot).
 - RISCO: frota em versoes antigas (2.0.20-2.0.25) volta a enviar a cada 15-30 s => cota Cloud de 20/mes pode acabar em ~10 dias e o backend pausa de novo (historico: 21,1 creditos em 30 dias, 96% 'Database server'). Free nao compra credito extra.
 - ERRO MEU (31/10): apos o teste 'sem Magisk' no bancada, restaurei o Magisk mas NAO conferi as permissoes de localizacao; o app ficou com 'Permissao negada: gps provider requires ACCESS_FINE_LOCATION' (126 ocorrencias, 07:53-13:38 de 31/10) => bancada NAO rastreou no sabado, inclusive no passeio longe do perimetro. As permissoes voltaram quando o modulo novo foi reinstalado (21:24). Licao: apos qualquer teste que desinstale o app, conferir 'dumpsys package' permissoes + 1 fix GPS no log antes de declarar restaurado.
+
+
+## 02/11 (noite) - medicao de dados, deslocamento, limiar 200m (APK cda11e9)
+- Dados (bancada, app uid 10064, LTE): 148KB em 9,5h (~29KB so de religar o app) => ~12,5KB/h => ~175KB/dia na janela ativa => ~5-6MB/mes por terminal (teto 20MB, dividido com o POS). Bancada parada: terminal em movimento envia mais (filtro limita).
+- Deslocamento real: teste com terminal falso + ponto 250m, 3 fixes GPS bons fora por >3min => evento left_geofence (6994m) e outside_geofence=true. Linhas de teste removidas. Insert em lote NAO funciona (gatilho avalia so o fix mais recente e ignora dup <20s): inserir 1 fix por vez em ordem cronologica.
+- Falso "Movimento confirmado" parado: 8 em 34h (103-212m); fixes avaliados 577, mediana 38m, p90 142m, p99 341m. Limiar MIN_SEND_DIST_M 100 -> 200m (commit cda11e9, aprovado pelo usuario 02/11). Custo dos falsos era ~10KB/dia (irrelevante), mas fica mais limpo.
+- Heartbeat: NAO ha bug. O "age" do log e o tempo desde o ULTIMO ENVIO, nao a idade do fix; heartbeat envia lastKnownLocation (fix mais recente) com recorded_at = agora. Minha leitura anterior (posicao velha) estava errada.
+- APK cda11e9 (SHA256 81F9B891...6B62) instalado na bancada via modulo Magisk: priv-app, versionCode 43, permissoes FINE/COARSE/PHONE ok, whitelist de bateria ok, servico em primeiro plano, log com limiar=200m, 0 permissao negada.
+- Backend Lovable PAUSADO de novo (verificado: query falha, DNS nao resolve). App na bancada loga "Heartbeat falhou" - esperado enquanto pausado.
+- Pendente: teste em terminal SEM Magisk (+ reboot), backup keystore-prod, OK explicito do usuario para merge em main.
