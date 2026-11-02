@@ -223,3 +223,12 @@ Autorizacao do Wallacy: "faca tudo que for melhoria" (28/10), congelamento do la
 - APK_SRC do modulo agora = gps-pos-v2.0.26-01d12a3.apk (inclui a correcao de iniciar o servico ao abrir). Zip: C:\Users\walla\Downloads\GPS_POS_MagiskModule_v2026.zip (14,7MB); o anterior (313e7d7) ficou em ..._v2026_313e7d7.zip.
 - Verificado: 'sh -n' no service.sh extraido do zip = OK; trecho testado no Sunmi como shell: adiciona 1x, 2a passada nao duplica, limpou depois.
 - NAO verificado ainda: execucao real como root no boot do terminal de bancada (precisa dele ligado no PC). Nao declarar pronto antes disso.
+
+
+## 02/11 - Noite no terminal de bancada com APK 01d12a3 + modulo novo (36 h, sem reinicio do app)
+
+- Uptime 1 d 10 h, mesmo PID do app (3628) o tempo todo, 0 crash/AndroidRuntime/'Servico destruido', bateria 100% na tomada.
+- Silencio noturno: 1 envio 'antes de dormir' as 20:00 de 01/11 (esperado). Isencao de bateria (whitelist) presente, reaplicada pelo service.sh.
+- 4 'Movimento confirmado' em ~36 h com o terminal PARADO (19:44 128m, 19:55 103m, 06:46 147m, 07:24 119m do ultimo envio, 2 fixes GPS acc~8m concordando): deriva de GPS dentro do predio passando de 100m. ~2-3 envios extras/dia (antes da v2.0.26: centenas). Aceitavel, mas nao e zero; se quiser, subir o limiar ou exigir 3 fixes.
+- Envios todos falham com DNS (backend morto), logo consumo de dado real continua nao mensuravel.
+- Lovable (02/11): gps-cg com frontend no ar; get_database_status diz enabled, mas query_database retorna 'Database is possibly not accessible' e o DNS de kyxowmjriiqzjacwltja.supabase.co continua sem resolver (PC e terminal). Saldo de creditos nao e legivel por ferramenta.
