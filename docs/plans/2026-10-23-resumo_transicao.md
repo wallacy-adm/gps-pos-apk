@@ -251,3 +251,14 @@ Autorizacao do Wallacy: "faca tudo que for melhoria" (28/10), congelamento do la
 - APK cda11e9 (SHA256 81F9B891...6B62) instalado na bancada via modulo Magisk: priv-app, versionCode 43, permissoes FINE/COARSE/PHONE ok, whitelist de bateria ok, servico em primeiro plano, log com limiar=200m, 0 permissao negada.
 - Backend Lovable PAUSADO de novo (verificado: query falha, DNS nao resolve). App na bancada loga "Heartbeat falhou" - esperado enquanto pausado.
 - Pendente: teste em terminal SEM Magisk (+ reboot), backup keystore-prod, OK explicito do usuario para merge em main.
+
+
+## 05/11 - TERMINAL SEM MAGISK (Arny AR-SP5, Android 9, serial ARSP5211103001068, chip TIM) - testes reais
+- Terminal: sem root (uid shell, sem /data/adb), Doze ligado (light+deep), MDMs presentes (xcheng.mdm, pos.mdmservice, digirun.update.smart, pingbo.gotoagent, xcheng.store), app de venda cambistamobile. Chip TIM com sinal.
+- Certificado: TODAS as versoes (v2.0.22, 24, 25 e 2.0.26-cda11e9/dc2f605) tem a mesma assinatura (51ed3f60). Cadeia real da frota 2.0.22 -> 2.0.24 -> 2.0.25 -> 2.0.26 instalou POR CIMA, em sequencia, sem desinstalar e sem formatar (adb install -r, todas "Success").
+- MDM: nesta unidade o app NAO foi removido (sobreviveu a 40s, a reboots e a 25+ min). Na bancada Positivo/O1 o MDM removia em ~8s: comportamento depende do modelo/MDM.
+- BUG ACHADO E CORRIGIDO (commit dc2f605, build CI 42120482624, APK gps-pos-v2.0.26-dc2f605.apk SHA256 6017EC78CBA8A883AB01A9E4FCE1F5B6D655DD888C594388870B48AF1BF14582): na instalacao manual o app sobe ANTES do tecnico aceitar as permissoes; startListening recebia SecurityException e fazia stopSelf(); depois de aceitar o dialogo nada religava ate o alarme de 1h ou reboot. Agora o servico fica vivo e checa a permissao a cada 5s (ate 1h): teste real -> permissao aceita 19:26:50, "GPS_PROVIDER iniciado" 19:26:50.264, sem reboot. (A correcao anterior, MainApplication.kt, so cobria o inicio do processo.)
+- Reboot sem Magisk: BootReceiver sobe o servico em primeiro plano, permissoes persistem, GPS convergindo (2 reboots testados, 3 contando o do fluxo de bateria).
+- Bateria: terminal com Doze LIGADO e app fora da whitelist por padrao. Caminho manual que funciona (Android 9 Arny): Configuracoes > Otimizacao de bateria > seletor "Nao otimizados" > "Todos os apps" > rolar ate "Servicos do Sistema" > "Nao otimizar" > Concluido. Confirmado: dumpsys deviceidle whitelist = user,com.system.posservice e SOBREVIVE ao reboot. No V2 (Android 7.1.1) o Doze e desligado de fabrica: nao precisa.
+- Convivencia: app de venda (cambistamobile) abre e roda junto; nosso processo ~50MB PSS, CPU baixa, sem crash (logcat -b crash vazio).
+- Banco continua PAUSADO (HTTP 540 / sem resolver): envio ponta a ponta com este build ainda nao visto no painel; o caminho de envio e o mesmo da bancada (provado com 01d12a3). Soak do terminal: logcat em test-build-2026\soak-ARSP5-1105\logcat.txt.
