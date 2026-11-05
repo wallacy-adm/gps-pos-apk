@@ -1616,8 +1616,31 @@ public class GpsLocationService extends Service {
             }
         } catch (SecurityException e) {
             Log.e(TAG, "Permissao negada: " + e.getMessage());
-            stopSelf();
+            // v2.0.26 (05/11): instalacao manual (sem Magisk): o app sobe ANTES do tecnico aceitar as permissoes.
+            // Antes: stopSelf() e o rastreio so voltava no proximo alarme (ate 1h) ou reboot. Agora espera a permissao e liga na hora.
+            schedulePermissionRetry();
         }
+    }
+
+    private boolean permRetryScheduled = false;
+    private int permRetryCount = 0;
+    private void schedulePermissionRetry() {
+        if (permRetryScheduled) return;
+        permRetryScheduled = true;
+        keepaliveHandler.postDelayed(() -> {
+            permRetryScheduled = false;
+            if (listening) return;
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                Log.i(TAG, "Permissao concedida - iniciando rastreio");
+                permRetryCount = 0;
+                startListening();
+            } else if (++permRetryCount < 720) {
+                schedulePermissionRetry();
+            } else {
+                Log.w(TAG, "Permissao nao concedida em 1h - parando (alarme horario reinicia)");
+                stopSelf();
+            }
+        }, 5_000L);
     }
 
     private void stopListening() {
