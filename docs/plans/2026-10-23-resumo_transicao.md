@@ -273,3 +273,29 @@ Autorizacao do Wallacy: "faca tudo que for melhoria" (28/10), congelamento do la
 - Pausa de novo confirmada por HTTP 540 as 06:32:35. Cota/credito Run real ainda depende de print do Usage (nao medido).
 - Nota cosmetica: log do heartbeat mostra age=1793957400s quando lastSentTime=0 (processo recem-reiniciado); nao afeta envio.
 - Pendente: aprovacao do usuario + merge main; backup keystore-prod; decidir como atualizar a frota (atualizador congelado; so visita fisica ou Wi-Fi).
+
+
+## 06/11 noite — MERGE E RELEASE v2.0.26 (aprovado pelo Wallacy: "ok merge")
+
+- Merge `v2.0.26-dev` -> `main` (8854bbd, --no-ff). Antes: main tinha 8 commits que a dev nao tinha (docs/tests do gatilho v3 + congelamento do latest.json); merge sem conflito, plugin identico ao da dev.
+- CI run 42315662484: success. Release v2.0.26 publicada (versionCode 43). Commit do bot fe3a756 atualizou o latest.json.
+- latest.json apos o CI: `version_code=1` (CONGELADO, preservado), `version_name=2.0.26`, `released_version_code=43`. A frota NAO atualiza sozinha.
+- APK oficial: `gps-pos-v2.0.26.apk`, 29.542.164 bytes, SHA256 `09F3B7408C56670CD765BDC6BE2D22750AD3D9FA5A5D9AF67F73454D6DA954A2`. Assinatura `51ed3f60` (mesma de 22/24/25).
+- Regressao pos-merge no AR-SP5 (sem Magisk) com o APK OFICIAL: instalou por cima (Success), versionCode 43, mesma assinatura, permissoes e isencao de bateria mantidas, servico em primeiro plano, reboot OK (BootReceiver subiu o servico 21:10:29), app de vendas (cambistamobile) abre normal ao lado.
+- Modulo Magisk reconstruido com o APK oficial (hash conferido dentro do zip): `C:\Users\walla\Downloads\GPS_POS_MagiskModule_v2026.zip` (copia em `test-build-2026\release-v2.0.26\GPS_POS_MagiskModule_v2.0.26.zip`). NAO instalado em nenhum aparelho.
+- Backup do keystore: `C:\eas\gps-pos-apk\backup-keystore\` (copia de `keystore-prod\`, hashes iguais). Ambas as pastas estao em `.git/info/exclude` (o repo e PUBLICO: nunca commitar). Esta na MESMA maquina: copia externa (pendrive/nuvem privada) continua recomendada.
+
+### NAO testado (honesto)
+- Positivo/O1 e V2 com o build final (so o AR-SP5 estava disponivel). Diff cda11e9->dc2f605 e so o bloco de permissao negada (24+/1-). Validar na primeira instalacao fisica de cada um, pelo roteiro.
+- Guarda de Wi-Fi do AutoUpdater: so revisada em codigo.
+- Chegada ao banco do envio "antes de dormir" das 20h: o ramo roda (log), mas o banco estava pausado.
+
+### Credito Lovable (correcao)
+- Print Usage 06/11 (Run expandido): Run 0,67 todo coberto pela cota gratuita; categoria quase toda Database; 02/11 ~0,6 (banco ligado + testes + terminais antigos), 06/11 ~0,08 (janela curta), 03-05/11 zero (pausado). Hipotese anterior (custo por uptime) NAO se sustenta. Tamanho da cota gratuita do Run: desconhecido.
+- Conferir frota 100% atualizada: janela curta do banco, 1 consulta em devices.app_version, pausar de novo.
+
+### Proximos passos
+1. Instalar na Positivo e na V2 pelo roteiro (`2026-11-06-roteiro-instalacao-v2.0.26.md`) e conferir o checklist.
+2. Visitas fisicas para atualizar a frota (Kelly 2.0.25; Nicole, Noemia, Kelly bar moela 2.0.20 sao os que mais gastam).
+3. Janela curta do banco para listar app_version; so religar o banco de forma continua com a frota atualizada.
+4. So depois: reativar o updater (latest.json version_code), em decisao separada.

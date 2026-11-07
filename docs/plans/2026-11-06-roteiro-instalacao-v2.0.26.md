@@ -1,6 +1,6 @@
 # Roteiro de instalação — GPS POS Tracker v2.0.26 (app "Serviços do Sistema")
 
-Status: RASCUNHO até o merge ser aprovado. O APK só vai pra rua depois de testado e aprovado pelo Wallacy.
+Status: v2.0.26 mergeada e publicada (Release v2.0.26, versionCode 43, APK SHA256 09F3B7408C56670CD765BDC6BE2D22750AD3D9FA5A5D9AF67F73454D6DA954A2). Usar SOMENTE o APK da Release. O APK so vai pra rua depois de testado e aprovado pelo Wallacy.
 Pacote: `com.system.posservice`. Mesma assinatura das versões 2.0.22 / 24 / 25 → instala POR CIMA, sem desinstalar e sem formatar.
 
 ## 0. Antes de sair (técnico)
