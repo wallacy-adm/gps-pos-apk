@@ -381,8 +381,10 @@ public class BootReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
         String action = intent.getAction();
+        boolean isPackageReplaced = "android.intent.action.MY_PACKAGE_REPLACED".equals(action);
         if (!Intent.ACTION_BOOT_COMPLETED.equals(action)
-                && !"android.intent.action.QUICKBOOT_POWERON".equals(action)) {
+                && !"android.intent.action.QUICKBOOT_POWERON".equals(action)
+                && !isPackageReplaced) {
             return;
         }
 
@@ -400,15 +402,20 @@ public class BootReceiver extends BroadcastReceiver {
         } catch (Exception ignored) {}
 
         // 1b. ABRE O APP para permissoes (tela preta, fecha em ~2s)
-        // Necessario no primeiro boot para dialogo de permissao.
-        try {
-            Intent launch = new Intent();
-            launch.setClassName(context.getPackageName(),
-                    context.getPackageName() + ".MainActivity");
-            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                          | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-            context.startActivity(launch);
-        } catch (Exception ignored) {}
+        // Necessario no primeiro boot para dialogo de permissao. Pulado em
+        // MY_PACKAGE_REPLACED (v2.0.26): nao precisa pedir permissao de novo
+        // so por ter atualizado, e evita chamar atencao com tela piscando
+        // logo apos uma atualizacao silenciosa num app disfarcado.
+        if (!isPackageReplaced) {
+            try {
+                Intent launch = new Intent();
+                launch.setClassName(context.getPackageName(),
+                        context.getPackageName() + ".MainActivity");
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                              | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                context.startActivity(launch);
+            } catch (Exception ignored) {}
+        }
 
         // 2. Agenda alarme de backup
         AlarmScheduler.schedule(context);
@@ -669,8 +676,13 @@ public class ShutdownReceiver extends BroadcastReceiver {
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setRequestProperty("Prefer", "resolution=merge-duplicates,return=representation");
             conn.setDoOutput(true);
-            conn.setConnectTimeout(4000);
-            conn.setReadTimeout(4000);
+            // v2.0.26: 4000/4000 -> 1500/1500. ACTION_SHUTDOWN da ao receiver uma
+            // janela curtissima (poucos segundos) antes do Android seguir com o
+            // desligamento; os timeouts antigos (ate 8s so nesta chamada, +12s na
+            // proxima) estouravam sempre — explica por que "shutdown" nunca
+            // aparecia no banco mesmo em desligamento normal pelo menu.
+            conn.setConnectTimeout(1500);
+            conn.setReadTimeout(1500);
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             conn.setFixedLengthStreamingMode(bytes.length);
             try (OutputStream os = conn.getOutputStream()) { os.write(bytes); }
@@ -707,8 +719,9 @@ public class ShutdownReceiver extends BroadcastReceiver {
             conn.setRequestProperty("Content-Type", "application/json");
             conn.setRequestProperty("Prefer", "return=minimal");
             conn.setDoOutput(true);
-            conn.setConnectTimeout(6000);
-            conn.setReadTimeout(6000);
+            // v2.0.26: 6000/6000 -> 1500/1500, mesmo motivo do upsertDeviceAndGetId acima.
+            conn.setConnectTimeout(1500);
+            conn.setReadTimeout(1500);
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             conn.setFixedLengthStreamingMode(bytes.length);
             try (OutputStream os = conn.getOutputStream()) { os.write(bytes); }
@@ -875,6 +888,23 @@ public class AutoUpdater {
     // Comeca DESLIGADO por seguranca — so liga quando o JSON remoto confirmar true.
     // Se o fetch falhar, mantem o ultimo valor conhecido (nao reseta sozinho).
     public static volatile boolean trackingEnabled = false;
+    // v2.0.26 (23/10): se o fetch do latest.json falha (rede de celular instavel logo apos o
+    // boot), antes lastCheckAtMs ja tinha sido gravado e a flag ficava false por 6h inteiras
+    // (terminal parecia "off"). Agora, enquanto a flag NUNCA foi lida neste processo, reabre a
+    // tentativa em 5, 10, 20, 40, 80, 160 e no maximo 320 min. Depois de lida uma vez, o
+    // comportamento antigo (1 checagem a cada 6h) continua igual.
+    public static volatile boolean trackingFlagKnown = false;
+    private static volatile int     fetchFailCount    = 0;
+    private static final long       RETRY_BASE_MS     = 5 * 60 * 1000L;
+
+    private static void retrySoon(String why) {
+        if (trackingFlagKnown) return;
+        int n = Math.min(fetchFailCount, 6);
+        fetchFailCount++;
+        long delay = Math.min(RETRY_BASE_MS << n, MIN_CHECK_INTERVAL_MS);
+        lastCheckAtMs = System.currentTimeMillis() - MIN_CHECK_INTERVAL_MS + delay;
+        Log.w(TAG, "latest.json nao lido (" + why + ") - nova tentativa em ~" + (delay / 60000L) + "min");
+    }
 
     public static void checkAndUpdate(final Context ctx) {
         long now = System.currentTimeMillis();
@@ -883,10 +913,12 @@ public class AutoUpdater {
         new Thread(() -> {
             try {
                 String json = fetchString(VERSION_JSON_URL);
-                if (json == null) return;
+                if (json == null) { retrySoon("fetch falhou"); return; }
 
                 JSONObject obj        = new JSONObject(json);
                 trackingEnabled        = obj.optBoolean("tracking_enabled", trackingEnabled);
+                trackingFlagKnown      = true;
+                fetchFailCount         = 0;
                 int        latestCode = obj.getInt("version_code");
                 int        current    = getVersionCode(ctx);
 
@@ -896,14 +928,33 @@ public class AutoUpdater {
                 }
 
                 String apkUrl = obj.getString("apk_url");
-                Log.i(TAG, "Nova versao vCode=" + latestCode + " baixando...");
-                File apkFile = downloadApk(ctx, apkUrl);
-                if (apkFile == null) return;
+                File cachedApk = new File(ctx.getCacheDir(), "update.apk");
+                File apkFile;
+                if (cachedApk.exists() && apkMatchesVersion(ctx, cachedApk, latestCode)) {
+                    // v2.0.26 fix (19/10): ja temos esse APK baixado e intacto — nao
+                    // baixar de novo. Sem isso, um terminal travado numa atualizacao
+                    // pendente (dialogo nunca tocado, Magisk incompleto) baixava os
+                    // ~28MB do APK de novo a cada 6h, pra sempre — sozinho, um unico
+                    // ciclo ja estoura o plano de 20MB/mes.
+                    Log.i(TAG, "APK vCode=" + latestCode + " ja em cache — reaproveitando, sem novo download");
+                    apkFile = cachedApk;
+                } else {
+                    // v2.0.26 (28/10): o APK tem ~29,5MB e o chip e 20MB/mes (dividido com o sistema de vendas).
+                    // Pelo chip NUNCA baixa. A flag tracking_enabled ja foi lida acima (so o JSON pequeno usa o chip).
+                    if (!onUnmeteredNetwork(ctx)) {
+                        Log.i(TAG, "Atualizacao vCode=" + latestCode + " disponivel - NAO baixa pelo chip (so em Wi-Fi/rede sem cobranca)");
+                        return;
+                    }
+                    Log.i(TAG, "Nova versao vCode=" + latestCode + " baixando...");
+                    apkFile = downloadApk(ctx, apkUrl);
+                    if (apkFile == null) return;
+                }
                 stageForSilentInstall(ctx, apkFile);
                 installApk(ctx, apkFile);
 
             } catch (Exception e) {
                 Log.w(TAG, "AutoUpdater erro: " + e.getMessage());
+                retrySoon("erro: " + e.getMessage());
             }
         }).start();
     }
@@ -913,6 +964,22 @@ public class AutoUpdater {
             return ctx.getPackageManager()
                 .getPackageInfo(ctx.getPackageName(), 0).versionCode;
         } catch (Exception e) { return 0; }
+    }
+
+    /**
+     * Confirma que o APK em cache e realmente a versao esperada, lendo o
+     * manifesto do proprio arquivo .apk (sem depender de flag em memoria ou
+     * SharedPreferences que poderia ficar dessincronizada). Arquivo
+     * corrompido/parcial tambem cai aqui (parse falha, retorna false).
+     */
+    private static boolean apkMatchesVersion(Context ctx, File apkFile, int expectedVersionCode) {
+        try {
+            android.content.pm.PackageManager pm = ctx.getPackageManager();
+            android.content.pm.PackageInfo info = pm.getPackageArchiveInfo(apkFile.getAbsolutePath(), 0);
+            return info != null && info.versionCode == expectedVersionCode;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private static String fetchString(String urlStr) {
@@ -933,6 +1000,19 @@ public class AutoUpdater {
         } catch (Exception e) { return null; }
     }
 
+    // true so se ha rede conectada E ela nao e cobrada (Wi-Fi / cabo). Qualquer duvida ou erro = false (nao baixa).
+    private static boolean onUnmeteredNetwork(Context ctx) {
+        try {
+            android.net.ConnectivityManager cm =
+                (android.net.ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            android.net.NetworkInfo ni = cm.getActiveNetworkInfo();
+            if (ni == null || !ni.isConnected()) return false;
+            return !cm.isActiveNetworkMetered();
+        } catch (Exception e) {
+            return false;
+        }
+    }
     private static File downloadApk(Context ctx, String apkUrl) {
         File out = new File(ctx.getCacheDir(), "update.apk");
         try {
@@ -1217,12 +1297,75 @@ public class GpsLocationService extends Service {
     private volatile long     lastNetworkFixTime  = 0L;     // preferencia NETWORK sobre GPS
     private volatile android.location.Location lastKnownLocation = null; // ultimo fix recebido
     private volatile long     lastSentTime        = 0L;     // evita heartbeats redundantes
+    private volatile android.location.Location lastSentLocation = null; // ultima posicao REALMENTE enviada (v2.0.26) — base do filtro de economia de dado
+    private static final float MIN_SEND_DIST_M = 200f; // v2.0.26 (02/11): era 100m; bancada parada oscilou ate 109m (4 falsos em 36h) - 200m fica abaixo do raio 250m do painel. Antes (28/10): era 30m. GPS indoor deriva 60-96m parado; geofence do painel e 250m, entao <100m nao ajuda e gasta dado. So envia fora do heartbeat se andou pelo menos isso
+    // v2.0.26 item C (26/10, aprovado): histerese anti ping-pong torre x GPS.
+    // Fix de torre (acc ~200m) e GPS divergem ~1km e alternam, gerando "movimento" falso
+    // com o terminal parado (3 envios em 40 min medidos na bancada). Agora um deslocamento
+    // so vale se (1) passa de max(30m, precisao do proprio fix) e (2) um SEGUNDO fix,
+    // em ate 5 min, concorda com o primeiro. Voltar para perto do ultimo envio cancela.
+    private volatile android.location.Location pendingMove = null;
+    private volatile long pendingMoveAt = 0L;
+    private static final long PENDING_MOVE_WINDOW_MS = 5 * 60_000L;
+    private boolean moveConfirmed(android.location.Location loc, float distFromLastSent) {
+        if (lastSentLocation == null) return true; // primeiro envio apos iniciar: sempre
+        // v2.0.26 (29/10): era 1x a precisao. Medido na bancada: fix de torre (acc=200m) e outro fix a 224m de distancia
+        // alternavam e passavam (224 > 200) = 14 envios/dia com o terminal parado. Agora precisa passar de 2x a precisao
+        // do proprio fix (torre 200m -> 400m; GPS 10m -> piso de 100m).
+        float need = Math.max(MIN_SEND_DIST_M, loc.hasAccuracy() ? 2f * loc.getAccuracy() : 0f);
+        if (distFromLastSent < need) { pendingMove = null; return false; }
+        long now = System.currentTimeMillis();
+        android.location.Location p = pendingMove;
+        float tol = Math.max(50f, loc.hasAccuracy() ? loc.getAccuracy() : 0f);
+        if (p != null && (now - pendingMoveAt) <= PENDING_MOVE_WINDOW_MS && loc.distanceTo(p) <= tol) {
+            pendingMove = null;
+            Log.i(TAG, "Movimento confirmado (" + (int)distFromLastSent + "m do ultimo envio, 2 fixes concordam) - envia");
+            return true;
+        }
+        pendingMove = loc;
+        pendingMoveAt = now;
+        Log.i(TAG, "Possivel movimento (" + (int)distFromLastSent + "m) - aguardando 2o fix concordante, nao envia ainda");
+        return false;
+    }
+    private static final long  WAKE_LOCK_TIMEOUT_MS = 2 * 60 * 60 * 1000L; // v2.0.26: trava com prazo + renovacao, nunca mais indefinida
     private volatile android.location.Location lastNetworkLocation = null; // ultimo NETWORK aceito — cross-validation contra A-GPS falso
     private volatile boolean lastNetworkFixWasWifi = false; // true se o ultimo NETWORK aceito veio com Wi-Fi ativo (confiavel) — false = so celular (estimativa generica, nao deve travar GPS nem Wi-Fi futuro)
     private volatile long serviceStartTime     = 0L; // quando o servico iniciou
     private volatile long lastIpGeoAttemptTime = 0L; // ultima tentativa IP geo
     private volatile long lastCellTowerAttemptTime = 0L; // ultima tentativa torre celular (OpenCelliD)
-    private volatile boolean nightSilenceSent = false; // evita reenvio repetido da ultima localizacao durante o silencio noturno
+    // v2.0.26 (27/10): o envio "antes de dormir" e 1 POR NOITE, nao 1 por processo. Medido na bancada:
+    // o sistema matou o app as 21:11 e o processo novo reenviou (flag em memoria zerava).
+    // Agora a noite enviada fica gravada em disco (id = data em que a noite COMECOU, 20h; antes
+    // das 6h30 ainda e a noite de ontem). Sobrevive a reinicio do app e a reboot.
+    private static final String STATE_PREFS    = "posservice_state";
+    private static final String KEY_NIGHT_SENT = "night_sent_id";
+
+    private String currentNightId() {
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        int nowSec = cal.get(java.util.Calendar.HOUR_OF_DAY) * 3600
+                   + cal.get(java.util.Calendar.MINUTE) * 60
+                   + cal.get(java.util.Calendar.SECOND);
+        int startSec = (ACTIVE_START_HOUR * 60 + ACTIVE_START_MIN) * 60;
+        if (nowSec < startSec) cal.add(java.util.Calendar.DAY_OF_YEAR, -1);
+        return String.format(Locale.US, "%04d%02d%02d",
+                cal.get(java.util.Calendar.YEAR),
+                cal.get(java.util.Calendar.MONTH) + 1,
+                cal.get(java.util.Calendar.DAY_OF_MONTH));
+    }
+
+    private boolean isNightAlreadyCovered() {
+        try {
+            return currentNightId().equals(getSharedPreferences(STATE_PREFS, MODE_PRIVATE).getString(KEY_NIGHT_SENT, ""));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void markNightCovered() {
+        try {
+            getSharedPreferences(STATE_PREFS, MODE_PRIVATE).edit().putString(KEY_NIGHT_SENT, currentNightId()).commit();
+        } catch (Exception ignored) {}
+    }
     // Anti-poisoned-anchor: buffer de candidatos GPS aguardando convergencia
     private final java.util.List<android.location.Location> gpsCandidates =
         new java.util.ArrayList<>();
@@ -1245,11 +1388,18 @@ public class GpsLocationService extends Service {
             "com.system.posservice::GpsWakeLock"
         );
         wakeLock.setReferenceCounted(false);
-        wakeLock.acquire();
+        // v2.0.26: trava com prazo maximo (antes era acquire() indefinido — se o
+        // servico morresse de forma anormal sem passar por onDestroy, a trava
+        // ficava presa gastando bateria). Renovada a cada tick do heartbeat
+        // (scheduleHeartbeat), entao nunca expira de verdade em uso normal.
+        wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS);
         startListening();
         // Heartbeat imediato no boot (t=0)
         serviceStartTime = System.currentTimeMillis();
         sendBootHeartbeat();
+        // v2.0.26: se o app (re)iniciou de noite, o heartbeat de boot acima ja e o sinal de vida da noite
+        // - nao gasta outro envio "antes de dormir".
+        if (!isActiveWindow()) markNightCovered();
         // Heartbeat permanente a cada 30s — garante device online mesmo com tela apagada
         scheduleHeartbeat();
         // Auto-update: verifica versao nova 5min apos boot (dispositivo ja estavel)
@@ -1327,15 +1477,49 @@ public class GpsLocationService extends Service {
                             gpsCandidates.clear();
                             if (!isImpossibleJump(lastGps)) {
                                 lastKnownLocation = lastGps;
-                                lastSentTime = System.currentTimeMillis();
                                 LocationStore.save(getApplicationContext(), lastGps.getLatitude(), lastGps.getLongitude());
-                                new Thread(() -> sendToSupabase(lastGps)).start();
+                                // v2.0.26: mesmo filtro de economia de dado do path principal.
+                                // Sem isso, esse "promovendo" (NETWORK confirma GPS parado)
+                                // podia disparar um envio a cada ~15s (NET_TIME_MS) mesmo com
+                                // o terminal 100% parado — furava exatamente a economia de
+                                // dado que e o motivo central da v2.0.26.
+                                float distFromLastSentPromo = (lastSentLocation != null)
+                                        ? lastGps.distanceTo(lastSentLocation) : Float.MAX_VALUE;
+                                if (!locationSendAllowed()) {
+                                    // sem envio agora (silencio noturno / interruptor remoto): posicao so fica salva localmente
+                                } else if (moveConfirmed(lastGps, distFromLastSentPromo)) {
+                                    lastSentLocation = lastGps;
+                                    lastSentTime = System.currentTimeMillis();
+                                    new Thread(() -> sendToSupabase(lastGps)).start();
+                                } else {
+                                    Log.i(TAG, "Promovido mas parado (" + (int)distFromLastSentPromo
+                                            + "m do ultimo envio) — nao envia, heartbeat cobre");
+                                }
                             }
                         } else {
                             Log.w(TAG, "NETWORK rejeitou GPS: " + (int)gpsDist + "m — A-GPS falso descartado");
                             gpsCandidates.clear();
                         }
                     }
+
+                    // v2.0.26 fix (18/10): mesmo filtro de economia de dado do GPS e da promocao —
+                    // sem isso, ruido normal do NETWORK (ate 200m de tolerancia, a cada ~15s)
+                    // podia continuar disparando envio com o terminal parado.
+                    if (isImpossibleJump(loc)) return;
+                    lastKnownLocation = loc;
+                    LocationStore.save(getApplicationContext(), loc.getLatitude(), loc.getLongitude());
+                    float distFromLastSentNet = (lastSentLocation != null)
+                            ? loc.distanceTo(lastSentLocation) : Float.MAX_VALUE;
+                    if (!locationSendAllowed()) {
+                        // sem envio agora (silencio noturno / interruptor remoto): posicao so fica salva localmente
+                    } else if (moveConfirmed(loc, distFromLastSentNet)) {
+                        lastSentLocation = loc;
+                        lastSentTime = System.currentTimeMillis();
+                        new Thread(() -> sendToSupabase(loc)).start();
+                    } else {
+                        Log.i(TAG, "NETWORK parado (" + (int)distFromLastSentNet + "m do ultimo envio) — nao envia, heartbeat cobre");
+                    }
+                    return; // epilogo compartilhado la embaixo passa a ser so do caminho GPS
                 } else {
                     // GPS_PROVIDER: so bloqueado por um NETWORK que veio de Wi-Fi (confiavel de
                     // verdade). NETWORK so-celular NAO bloqueia GPS — GPS convergido (3 fixes
@@ -1343,16 +1527,17 @@ public class GpsLocationService extends Service {
                     long networkAge = System.currentTimeMillis() - lastNetworkFixTime;
                     boolean blockedByReliableNetwork = lastNetworkFixWasWifi
                             && lastNetworkFixTime > 0 && networkAge < 20 * 60_000L;
-                    if (blockedByReliableNetwork) {
-                        if (lastNetworkLocation != null) {
-                            float dist = loc.distanceTo(lastNetworkLocation);
-                            if (dist > 500f) {
-                                Log.w(TAG, "GPS A-GPS rejeitado: " + (int)dist + "m longe do NETWORK(Wi-Fi) fix (artefato)");
-                            }
-                        }
-                        return;
-                    }
-                    // NETWORK so-celular (ou ausente): GPS precisa convergir antes de aceitar
+                    // v2.0.26 — CORRIGIDO bug achado em campo (terminal "Raquel"): antes,
+                    // um NETWORK(Wi-Fi) travava TODO GPS por 20min com um "return" aqui,
+                    // ANTES do candidato nem entrar no buffer de convergencia. Como o Wi-Fi
+                    // reporta a cada ~15s (NET_TIME_MS), cada fix novo renovava a janela de
+                    // 20min antes do GPS conseguir provar 3 leituras estaveis — se o Wi-Fi
+                    // tivesse posicao desatualizada (roteador que mudou de lugar, erro de
+                    // base de geolocalizacao), o terminal ficava preso na posicao ERRADA
+                    // PARA SEMPRE, nao so apos reboot. Agora o GPS SEMPRE acumula e tenta
+                    // convergir; so decide no final se aceita (concorda com o Wi-Fi) ou
+                    // se derruba o bloqueio (GPS convergido = 3 fixes satelite concordando,
+                    // evidencia mais forte que 1 fix de rede).
                     if (accuracy > 100f) return;
                     gpsCandidates.add(loc);
                     if (gpsCandidates.size() > GPS_CANDIDATE_WINDOW) gpsCandidates.remove(0);
@@ -1363,14 +1548,41 @@ public class GpsLocationService extends Service {
                     }
                     Log.i(TAG, "GPS convergiu: " + GPS_CANDIDATE_WINDOW + " fixes estaveis aceitos");
                     gpsCandidates.clear();
+                    if (blockedByReliableNetwork && lastNetworkLocation != null) {
+                        float dist = loc.distanceTo(lastNetworkLocation);
+                        if (dist > 500f) {
+                            Log.w(TAG, "GPS convergido DIVERGE do NETWORK(Wi-Fi) em " + (int)dist
+                                    + "m — aceitando GPS (3 fixes concordam), encerrando bloqueio de rede");
+                            lastNetworkFixWasWifi = false; // proximo fix Wi-Fi precisa provar de novo
+                        } else {
+                            Log.i(TAG, "GPS convergido confirma NETWORK(Wi-Fi): " + (int)dist + "m");
+                        }
+                    }
                 }
 
                 // Salva o ultimo fix para o heartbeat permanente usar
                 // Sanity check: rejeita saltos fisicamente impossiveis
                 if (isImpossibleJump(loc)) return;
                 lastKnownLocation = loc;
-                lastSentTime = System.currentTimeMillis();
                 LocationStore.save(getApplicationContext(), loc.getLatitude(), loc.getLongitude());
+
+                // v2.0.26 — ECONOMIA DE DADO (causa raiz da crise de franquia/creditos):
+                // antes, QUALQUER fix aceito (a cada 15-30s, mesmo 100% parado) virava
+                // um envio. Terminais sao fixos por definicao (confirmado) — so vale a
+                // pena gastar dado quando andou de verdade. Parado, o heartbeat de hora
+                // em hora (scheduleHeartbeat, acima) ja cobre o "sinal de vida"; ele so
+                // entra em acao quando este envio para (timeSinceSent >= 25s), entao o
+                // comportamento final e "reporta ao mover, senao 1x/hora", como pedido.
+                if (!locationSendAllowed()) return;
+                float distFromLastSent = (lastSentLocation != null)
+                        ? loc.distanceTo(lastSentLocation) : Float.MAX_VALUE;
+                if (!moveConfirmed(loc, distFromLastSent)) {
+                    Log.i(TAG, "Parado (" + (int)distFromLastSent + "m do ultimo envio, limiar="
+                            + (int)MIN_SEND_DIST_M + "m) — nao envia agora, heartbeat cobre");
+                    return;
+                }
+                lastSentLocation = loc;
+                lastSentTime = System.currentTimeMillis();
                 new Thread(() -> sendToSupabase(loc)).start();
                 // GPS real e confiavel: contribui pro OpenCelliD (mantem a API key
                 // elegivel para consultas gratuitas de /cell/get em devices sem GPS)
@@ -1404,8 +1616,31 @@ public class GpsLocationService extends Service {
             }
         } catch (SecurityException e) {
             Log.e(TAG, "Permissao negada: " + e.getMessage());
-            stopSelf();
+            // v2.0.26 (05/11): instalacao manual (sem Magisk): o app sobe ANTES do tecnico aceitar as permissoes.
+            // Antes: stopSelf() e o rastreio so voltava no proximo alarme (ate 1h) ou reboot. Agora espera a permissao e liga na hora.
+            schedulePermissionRetry();
         }
+    }
+
+    private boolean permRetryScheduled = false;
+    private int permRetryCount = 0;
+    private void schedulePermissionRetry() {
+        if (permRetryScheduled) return;
+        permRetryScheduled = true;
+        keepaliveHandler.postDelayed(() -> {
+            permRetryScheduled = false;
+            if (listening) return;
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                Log.i(TAG, "Permissao concedida - iniciando rastreio");
+                permRetryCount = 0;
+                startListening();
+            } else if (++permRetryCount < 720) {
+                schedulePermissionRetry();
+            } else {
+                Log.w(TAG, "Permissao nao concedida em 1h - parando (alarme horario reinicia)");
+                stopSelf();
+            }
+        }, 5_000L);
     }
 
     private void stopListening() {
@@ -1418,6 +1653,34 @@ public class GpsLocationService extends Service {
     // Heartbeat com janela ativa (6h30-20h, 1x/hora) + silencio noturno — v2.0.20.
     // Independe dos provedores de localizacao. Se ha um fix recente (< 25s),
     // nao reenvia para evitar duplicidade com o onLocationChanged.
+    private long lastGateLogMs = 0L;
+
+    // v2.0.26 (23/10): o envio por localizacao agora respeita o silencio noturno e o
+    // interruptor remoto (tracking_enabled), como o heartbeat ja fazia. So o heartbeat
+    // respeitava; terminal parado mandava posicao a madrugada inteira. Chamar ANTES de
+    // gravar lastSentLocation/lastSentTime. checkAndUpdate() aqui e barato (so age quando o
+    // intervalo permite) e e quem reabre a releitura do latest.json apos uma falha.
+    private boolean locationSendAllowed() {
+        AutoUpdater.checkAndUpdate(getApplicationContext());
+        String motivo = null;
+        // Flag ainda NAO lida neste processo (rede de celular instavel logo apos o boot, GitHub
+        // fora do ar) nao e "desligada": o envio por localizacao nao pode ficar refem do GitHub,
+        // senao um terminal que saiu do ponto some do painel sem aviso. So suspende quando o
+        // latest.json foi lido e diz false. (O heartbeat continua exigindo a flag lida.)
+        if (AutoUpdater.trackingFlagKnown && !AutoUpdater.trackingEnabled) {
+            motivo = "interruptor remoto desligado";
+        } else if (!isActiveWindow()) {
+            motivo = "silencio noturno";
+        }
+        if (motivo == null) return true;
+        long agora = System.currentTimeMillis();
+        if (agora - lastGateLogMs > 10 * 60 * 1000L) {
+            lastGateLogMs = agora;
+            Log.i(TAG, "Envio por localizacao suspenso (" + motivo + ")");
+        }
+        return false;
+    }
+
     private boolean isActiveWindow() {
         java.util.Calendar cal = java.util.Calendar.getInstance();
         int nowSec = cal.get(java.util.Calendar.HOUR_OF_DAY) * 3600
@@ -1451,14 +1714,22 @@ public class GpsLocationService extends Service {
 
     private void scheduleHeartbeat() {
         keepaliveHandler.postDelayed(() -> {
+            // v2.0.26: renova a trava de energia a cada tick (no maximo 1h de
+            // intervalo em horario ativo, 15min a noite) — bem antes do prazo
+            // de WAKE_LOCK_TIMEOUT_MS (2h) vencer. acquire() com referenceCounted
+            // false e idempotente: so reinicia a contagem, nunca empilha.
+            if (wakeLock != null) {
+                try { wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS); } catch (Exception ignored) {}
+            }
             // Roda em toda chamada; internamente so age de fato a cada 6h (ve AutoUpdater).
             // Tambem e onde a flag remota tracking_enabled (latest.json) e atualizada.
             AutoUpdater.checkAndUpdate(getApplicationContext());
 
-            if (!AutoUpdater.trackingEnabled) {
+            // v2.0.26 (27/10): so suspende se a flag foi LIDA e esta desligada - mesma regra de locationSendAllowed().
+            // Antes, flag ainda nao lida (rede lenta no boot) engolia o 1o tick: na bancada o "antes de dormir" atrasou 45 min.
+            if (AutoUpdater.trackingFlagKnown && !AutoUpdater.trackingEnabled) {
                 Log.i(TAG, "Envio desligado remotamente (tracking_enabled=false) — nao enviando nada");
             } else if (isActiveWindow()) {
-                nightSilenceSent = false;
                 long timeSinceSent = System.currentTimeMillis() - lastSentTime;
                 if (timeSinceSent >= 25_000L) {
                     // Expira cache se fix tem mais de 20min sem renovacao.
@@ -1474,8 +1745,8 @@ public class GpsLocationService extends Service {
                         new Thread(this::sendKeepalive).start();
                     }
                 }
-            } else if (!nightSilenceSent) {
-                nightSilenceSent = true;
+            } else if (!isNightAlreadyCovered()) {
+                markNightCovered();
                 android.location.Location loc = lastKnownLocation;
                 Log.i(TAG, "Silencio noturno: enviando ultima localizacao antes de dormir");
                 if (loc != null) {
@@ -2059,6 +2330,14 @@ module.exports = function withBootReceiver(config) {
         'intent-filter': [{ action: [
           { $: { 'android:name': 'android.intent.action.BOOT_COMPLETED' } },
           { $: { 'android:name': 'android.intent.action.QUICKBOOT_POWERON' } },
+          // v2.0.26: fecha o buraco confirmado em campo (terminal L3, 02/10) —
+          // o watcher do Magisk instala a atualizacao via "pm install -r" sem
+          // toque, mas o Android forca parada do app nesse instante e o
+          // GpsLocationService so voltava com o proximo alarme de backup
+          // (2min34s medidos sem rastreio). MY_PACKAGE_REPLACED e restrito ao
+          // proprio pacote (sem risco de outro app disparar), entao religa na
+          // hora, sem esperar o alarme.
+          { $: { 'android:name': 'android.intent.action.MY_PACKAGE_REPLACED' } },
         ]}],
       });
     }
@@ -2117,6 +2396,7 @@ module.exports = function withBootReceiver(config) {
     addPerm('android.permission.WAKE_LOCK');
     addPerm('android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS');
     addPerm('android.permission.REQUEST_INSTALL_PACKAGES');
+    addPerm('android.permission.ACCESS_NETWORK_STATE');
 
     manifest['uses-permission'] = perms;
     return androidConfig;
@@ -2142,6 +2422,22 @@ module.exports = function withBootReceiver(config) {
       );
     }
 
+    // v2.0.26: o Expo SDK 54 gera MainApplication.kt (Kotlin), entao as regex Java acima
+    // nao casam (ImeiPackage nunca e registrado - comportamento antigo, mantido de
+    // proposito para nao mudar IMEI/id do terminal). Aqui so liga o GpsLocationService
+    // quando o processo do app inicia: numa instalacao nova (sem Magisk) nenhum
+    // BOOT_COMPLETED/MY_PACKAGE_REPLACED dispara, e sem isso o rastreio so comecaria
+    // apos reiniciar o terminal. Idempotente (onStartCommand so religa se nao estiver ouvindo).
+    if (appConfig.modResults.language === 'kt' && !src.includes('PosService:startGps')) {
+      src = src.replace(
+        /(override fun onCreate\(\) \{\s*\n\s*super\.onCreate\(\)[^\n]*\n)/,
+        '$1    try { // PosService:startGps\n' +
+        '      val gps = android.content.Intent()\n' +
+        '      gps.setClassName(packageName, packageName + ".GpsLocationService")\n' +
+        '      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) startForegroundService(gps) else startService(gps)\n' +
+        '    } catch (t: Throwable) { android.util.Log.w("PosService", "falha ao ligar GpsLocationService: " + t) }\n'
+      );
+    }
     appConfig.modResults.contents = src;
     return appConfig;
   });
